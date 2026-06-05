@@ -2,7 +2,8 @@
 set -e
 
 cd /opt/skythermal
-git pull
+git fetch origin
+git reset --hard origin/main
 
 # Build frontend
 cd frontend
