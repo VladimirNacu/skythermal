@@ -928,3 +928,30 @@ button {
     right: 10%;
   }
 }
+
+/* ── Live API additions ──────────────────────────────── */
+@keyframes spin { to { transform: rotate(360deg); } }
+.spin { animation: spin 1s linear infinite; }
+.spinner-wrap { display: flex; justify-content: center; padding: 24px 0; color: var(--muted); }
+
+.errorBanner {
+  display: flex; align-items: center; gap: 8px;
+  background: rgba(255,79,105,0.12); border: 1px solid rgba(255,79,105,0.3);
+  border-radius: 8px; padding: 10px 12px; color: var(--red);
+  font-size: 13px; margin-bottom: 10px;
+}
+
+.blockerList { display: flex; flex-direction: column; gap: 6px; margin: 10px 0; }
+.blocker {
+  display: flex; align-items: flex-start; gap: 8px;
+  border-radius: 7px; padding: 8px 10px; font-size: 12px; line-height: 1.45;
+}
+.blocker.hard { background: rgba(255,79,105,0.1); color: var(--red); border: 1px solid rgba(255,79,105,0.25); }
+.blocker.warning { background: rgba(255,212,74,0.1); color: var(--yellow); border: 1px solid rgba(255,212,74,0.25); }
+
+.followUpList {
+  margin: 10px 0 0; padding-left: 18px;
+  color: var(--muted); font-size: 12px; line-height: 1.8;
+}
+
+.goBar span { flex: 1; }
