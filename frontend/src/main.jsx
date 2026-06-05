@@ -235,14 +235,15 @@ function Sidebar({ sites, activeSiteId, onSelectSite, bestStatus, mapState, onMa
 }
 
 // ─── MapLibre marker DOM builder ──────────────────────────────────────────────
+// Uses flexbox column (no absolute positioning) so MapLibre overflow:hidden can't clip children.
 function buildMarkerEl(site, status, windDeg, windKmh, isActive, onClick) {
   const color  = isActive ? "#2f9bff" : statusHex(status);
   const blowTo = windDeg != null ? (windDeg + 180) % 360 : 0;
 
   const el = document.createElement("div");
   el.className = "ml-marker" + (isActive ? " is-active" : "");
-  el.title = site.name;
 
+  // Wind arrow — rendered ABOVE the pin in flex column order
   const windHtml = windDeg != null ? `
     <div class="ml-wind">
       <svg width="18" height="18" viewBox="0 0 22 22" xmlns="http://www.w3.org/2000/svg">
@@ -324,7 +325,8 @@ function MapLibreMap({ sites, activeSiteId, onSelectSite, siteStatuses, onMapRea
 
       const el = buildMarkerEl(site, status, windDeg, windKmh, isActive, () => onSelectSite(site));
 
-      markersRef.current[site.id] = new maplibregl.Marker({ element: el, anchor: "bottom", offset: [0, 6] })
+      // anchor:'center' so lat/lon aligns with the pin circle in the flex column
+      markersRef.current[site.id] = new maplibregl.Marker({ element: el, anchor: "center" })
         .setLngLat([site.lon, site.lat])
         .addTo(mapRef.current);
     });
@@ -389,12 +391,7 @@ function MapCanvas({ sites, activeSiteId, onSelectSite, siteStatuses, weather, m
         Airspace <strong>{mapState.airspaceEnabled ? "ON" : "OFF"}</strong> <ChevronDown size={13} />
       </div>
 
-      {mapState.airspaceEnabled && (
-        <>
-          <div className="airspaceZone zoneOne">TMA TRONDHEIM<br />SFC–FL095</div>
-          <div className="airspaceZone zoneTwo">CTR OSLO<br />SFC–3500 ft</div>
-        </>
-      )}
+      {/* Airspace zones: will be MapLibre GeoJSON layers once real data is wired */}
 
       <div className="mapControls">
         <button title="Reset north" onClick={() => mapInstanceRef.current?.resetNorth({ duration: 500 })}>
