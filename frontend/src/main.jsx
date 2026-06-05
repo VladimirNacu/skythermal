@@ -30,6 +30,15 @@ const api = {
   recommendations: (lat, lon, radiusKm = 400, pilotLevel = "intermediate") =>
     fetch(`${BASE}/v1/sites/recommendations?lat=${lat}&lon=${lon}&radius_km=${radiusKm}&pilot_level=${pilotLevel}`).then(r => r.json()),
 
+  windGrid: (minLat, maxLat, minLon, maxLon, step, altitudeM = 0) => {
+    const p = new URLSearchParams({
+      min_lat: minLat.toFixed(2), max_lat: maxLat.toFixed(2),
+      min_lon: minLon.toFixed(2), max_lon: maxLon.toFixed(2),
+      step:    step.toFixed(2),   altitude_m: altitudeM,
+    });
+    return fetch(`${BASE}/v1/weather/wind-grid?${p}`).then(r => r.json());
+  },
+
   briefing: (siteId, pilotLevel = "intermediate") => {
     const now = new Date().toISOString();
     const end = new Date(Date.now() + 12 * 3600 * 1000).toISOString();
@@ -356,10 +365,208 @@ function MapLibreMap({ sites, activeSiteId, onSelectSite, siteStatuses, onMapRea
   return <div ref={containerRef} className="mapContainer" />;
 }
 
+// ─── Wind particle system ─────────────────────────────────────────────────────
+const WIND_OVERLAYS = new Set(["surface_wind", "altitude_wind", "gusts"]);
+const NUM_PARTICLES = 2800;
+
+const WIND_RAMP = [
+  [0,  [38,  123, 212]],
+  [10, [56,  152, 220]],
+  [20, [64,  190, 196]],
+  [30, [55,  180, 100]],
+  [40, [220, 200,  50]],
+  [50, [230, 120,  40]],
+  [60, [220,  60,  70]],
+  [80, [115,  43, 206]],
+];
+
+function windParticleColor(kmh, alpha) {
+  let i = 0;
+  while (i < WIND_RAMP.length - 1 && WIND_RAMP[i + 1][0] <= kmh) i++;
+  if (i >= WIND_RAMP.length - 1) {
+    const [r, g, b] = WIND_RAMP[WIND_RAMP.length - 1][1];
+    return `rgba(${r},${g},${b},${alpha})`;
+  }
+  const t  = (kmh - WIND_RAMP[i][0]) / (WIND_RAMP[i + 1][0] - WIND_RAMP[i][0]);
+  const c0 = WIND_RAMP[i][1], c1 = WIND_RAMP[i + 1][1];
+  const l  = (a, b) => Math.round(a + t * (b - a));
+  return `rgba(${l(c0[0],c1[0])},${l(c0[1],c1[1])},${l(c0[2],c1[2])},${alpha})`;
+}
+
+function buildWindGrid(pts) {
+  if (!pts?.length) return null;
+  const lats = [...new Set(pts.map(p => +p.lat.toFixed(3)))].sort((a, b) => a - b);
+  const lons = [...new Set(pts.map(p => +p.lon.toFixed(3)))].sort((a, b) => a - b);
+  if (lats.length < 2 || lons.length < 2) return null;
+  const lookup = {};
+  pts.forEach(p => { lookup[`${p.lat.toFixed(3)},${p.lon.toFixed(3)}`] = p; });
+  const data = lats.map(lat => lons.map(lon => lookup[`${lat.toFixed(3)},${lon.toFixed(3)}`] ?? null));
+  return { lats, lons, data,
+    stepLat: lats[1] - lats[0], stepLon: lons[1] - lons[0],
+    minLat: lats[0], maxLat: lats.at(-1), minLon: lons[0], maxLon: lons.at(-1) };
+}
+
+function interpWind(lng, lat, grid) {
+  if (!grid || lat < grid.minLat || lat > grid.maxLat || lng < grid.minLon || lng > grid.maxLon) return null;
+  const col = (lng - grid.minLon) / grid.stepLon;
+  const row = (lat - grid.minLat) / grid.stepLat;
+  const c0  = Math.floor(col), c1 = Math.min(c0 + 1, grid.lons.length - 1);
+  const r0  = Math.floor(row), r1 = Math.min(r0 + 1, grid.lats.length - 1);
+  const fc  = col - c0, fr = row - r0;
+  const get = (r, c) => grid.data[r]?.[c];
+  const w00 = get(r0,c0), w10 = get(r0,c1), w01 = get(r1,c0), w11 = get(r1,c1);
+  if (!w00) return null;
+  const bi  = k => {
+    const a = w00[k] ?? 0, b = (w10 ?? w00)[k] ?? 0;
+    const c = (w01 ?? w00)[k] ?? 0, d = (w11 ?? w00)[k] ?? 0;
+    return (1-fc)*(1-fr)*a + fc*(1-fr)*b + (1-fc)*fr*c + fc*fr*d;
+  };
+  return { u: bi("u_ms"), v: bi("v_ms"), speed: bi("speed_kmh") };
+}
+
+function computeGridStep(map) {
+  const zoom  = map.getZoom();
+  const lat   = map.getCenter().lat;
+  const mpp   = 156543.03392 * Math.cos(lat * Math.PI / 180) / Math.pow(2, zoom);
+  const pxPer = (111320 * Math.cos(lat * Math.PI / 180)) / mpp;
+  const step  = 70 / pxPer;
+  return Math.max(0.5, Math.min(2.5, Math.round(step * 4) / 4));
+}
+
+function WindParticles({ gridData, map }) {
+  const canvasRef = useRef(null);
+  const frameRef  = useRef(null);
+  const gridRef   = useRef(null);
+  const pclsRef   = useRef([]);
+
+  useEffect(() => {
+    if (!gridData?.grid?.length) { gridRef.current = null; return; }
+    gridRef.current = buildWindGrid(gridData.grid);
+  }, [gridData]);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas || !map) return;
+    const ctx = canvas.getContext("2d");
+
+    const scatter = (W, H) => {
+      pclsRef.current = Array.from({ length: NUM_PARTICLES }, () => ({
+        x: Math.random() * W,
+        y: Math.random() * H,
+        age: Math.floor(Math.random() * 80),
+        maxAge: 60 + Math.floor(Math.random() * 80),
+      }));
+    };
+
+    const resize = () => {
+      canvas.width  = canvas.offsetWidth;
+      canvas.height = canvas.offsetHeight;
+      scatter(canvas.width, canvas.height);
+    };
+
+    resize();
+    window.addEventListener("resize", resize);
+
+    const frame = () => {
+      frameRef.current = requestAnimationFrame(frame);
+      const grid = gridRef.current;
+      const W = canvas.width, H = canvas.height;
+      if (!grid || !W || !H) return;
+
+      const zoom   = map.getZoom();
+      const center = map.getCenter();
+      const mpp    = 156543.03392 * Math.cos(center.lat * Math.PI / 180) / Math.pow(2, zoom);
+      const DT     = 1.5;
+
+      ctx.fillStyle = "rgba(7,17,31,0.055)";
+      ctx.fillRect(0, 0, W, H);
+
+      pclsRef.current.forEach(p => {
+        const ll = map.unproject([p.x, p.y]);
+        const w  = interpWind(ll.lng, ll.lat, grid);
+
+        p.age++;
+        if (!w || p.age > p.maxAge || p.x < -10 || p.x > W + 10 || p.y < -10 || p.y > H + 10) {
+          p.x = Math.random() * W;
+          p.y = Math.random() * H;
+          p.age = 0;
+          p.maxAge = 60 + Math.floor(Math.random() * 80);
+          return;
+        }
+
+        const nx    = p.x + (w.u * DT) / mpp;
+        const ny    = p.y - (w.v * DT) / mpp;
+        const alpha = Math.min(1, p.age / 12) * 0.80;
+
+        ctx.beginPath();
+        ctx.moveTo(p.x, p.y);
+        ctx.lineTo(nx, ny);
+        ctx.strokeStyle = windParticleColor(w.speed, alpha);
+        ctx.lineWidth   = 1.4;
+        ctx.stroke();
+
+        p.x = nx;
+        p.y = ny;
+      });
+    };
+
+    frame();
+    return () => {
+      cancelAnimationFrame(frameRef.current);
+      window.removeEventListener("resize", resize);
+    };
+  }, [map]);
+
+  return (
+    <canvas
+      ref={canvasRef}
+      style={{ position: "absolute", inset: "0 0 182px", pointerEvents: "none", zIndex: 2 }}
+    />
+  );
+}
+
 // ─── Map Canvas (overlays + timeline) ────────────────────────────────────────
 function MapCanvas({ sites, activeSiteId, onSelectSite, siteStatuses, weather, mapState, onMapStateChange, forecastDays, onForecastDaysChange }) {
   const mapInstanceRef = useRef(null);
+  const [mapLoaded, setMapLoaded] = useState(false);
+  const [windGrid,  setWindGrid]  = useState(null);
   const ALTITUDES = [500, 1000, 1500, 2000, 3000];
+  const isWind = WIND_OVERLAYS.has(mapState.overlay);
+
+  useEffect(() => {
+    if (!isWind || !mapLoaded || !mapInstanceRef.current) {
+      if (!isWind) setWindGrid(null);
+      return;
+    }
+    const map = mapInstanceRef.current;
+    let tid;
+
+    const refresh = () => {
+      clearTimeout(tid);
+      tid = setTimeout(async () => {
+        const b    = map.getBounds();
+        const step = computeGridStep(map);
+        const altM = mapState.overlay === "altitude_wind" ? mapState.altitudeM : 0;
+        try {
+          const data = await api.windGrid(
+            b.getSouth() - 0.5, b.getNorth() + 0.5,
+            b.getWest()  - 0.5, b.getEast()  + 0.5,
+            step, altM,
+          );
+          setWindGrid(data);
+        } catch { /* ignore */ }
+      }, 300);
+    };
+
+    map.on("moveend", refresh);
+    map.on("zoomend", refresh);
+    refresh();
+    return () => {
+      clearTimeout(tid);
+      map.off("moveend", refresh);
+      map.off("zoomend", refresh);
+    };
+  }, [isWind, mapLoaded, mapState.overlay, mapState.altitudeM]);
 
   return (
     <main className="mapShell">
@@ -368,8 +575,15 @@ function MapCanvas({ sites, activeSiteId, onSelectSite, siteStatuses, weather, m
         activeSiteId={activeSiteId}
         onSelectSite={onSelectSite}
         siteStatuses={siteStatuses}
-        onMapReady={map => { mapInstanceRef.current = map; }}
+        onMapReady={map => {
+          mapInstanceRef.current = map;
+          if (map.loaded()) setMapLoaded(true);
+          else map.once("load", () => setMapLoaded(true));
+        }}
       />
+      {isWind && windGrid && mapLoaded && mapInstanceRef.current && (
+        <WindParticles gridData={windGrid} map={mapInstanceRef.current} />
+      )}
 
       <div className="topLegend">
         <span>Wind (km/h)</span>

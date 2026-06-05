@@ -5,6 +5,7 @@ Falls back gracefully if Open-Meteo or Redis are unreachable.
 """
 import json
 import logging
+import math
 from datetime import datetime, timezone
 
 import httpx
@@ -178,3 +179,107 @@ def fetch_site_weather(lat: float, lon: float, site_altitude_m: int, days: int =
     except Exception as exc:
         logger.error("Open-Meteo fetch failed (%s, %s): %s", lat, lon, exc)
         return []
+
+
+# ─── Wind grid (batch) ────────────────────────────────────────────────────────
+
+def fetch_wind_grid(
+    min_lat: float,
+    max_lat: float,
+    min_lon: float,
+    max_lon: float,
+    step: float = 1.0,
+    altitude_m: int = 0,
+) -> list[dict]:
+    """Fetch wind U/V vectors on a regular lat/lon grid.
+
+    Returns a list of {lat, lon, u_ms, v_ms, speed_kmh, direction_deg}.
+    U = eastward component, V = northward component (m/s).
+    """
+    # Cap to ≤ 200 grid points
+    n_lat = max(1, int((max_lat - min_lat) / step) + 1)
+    n_lon = max(1, int((max_lon - min_lon) / step) + 1)
+    if n_lat * n_lon > 200:
+        step = math.sqrt((max_lat - min_lat) * (max_lon - min_lon) / 200)
+        step = max(0.25, round(step * 4) / 4)
+        n_lat = max(1, int((max_lat - min_lat) / step) + 1)
+        n_lon = max(1, int((max_lon - min_lon) / step) + 1)
+
+    lats   = [round(min_lat + i * step, 3) for i in range(n_lat)]
+    lons   = [round(min_lon + j * step, 3) for j in range(n_lon)]
+    points = [(lat, lon) for lat in lats for lon in lons]
+    if not points:
+        return []
+
+    if altitude_m >= 2500:
+        spd_var, dir_var = "windspeed_700hPa",  "winddirection_700hPa"
+    elif altitude_m >= 800:
+        spd_var, dir_var = "windspeed_850hPa",  "winddirection_850hPa"
+    else:
+        spd_var, dir_var = "windspeed_10m",      "winddirection_10m"
+
+    cache_key = f"wgrid:{min_lat:.2f}:{max_lat:.2f}:{min_lon:.2f}:{max_lon:.2f}:{step:.2f}:{altitude_m}"
+    cached    = _cache_get(cache_key)
+    if cached:
+        return cached
+
+    lat_str = ",".join(str(p[0]) for p in points)
+    lon_str = ",".join(str(p[1]) for p in points)
+
+    try:
+        resp = httpx.get(
+            OPEN_METEO_URL,
+            params={
+                "latitude":       lat_str,
+                "longitude":      lon_str,
+                "hourly":         f"{spd_var},{dir_var}",
+                "wind_speed_unit":"kmh",
+                "forecast_days":  1,
+                "timezone":       "UTC",
+            },
+            timeout=20,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as exc:
+        logger.error("wind-grid fetch failed: %s", exc)
+        return []
+
+    if isinstance(data, dict):
+        data = [data]
+
+    now_str = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:00")
+    result  = []
+
+    for i, (lat, lon) in enumerate(points):
+        if i >= len(data):
+            break
+        hourly = data[i].get("hourly", {})
+        times  = hourly.get("time", [])
+        speeds = hourly.get(spd_var, [])
+        dirs   = hourly.get(dir_var, [])
+
+        idx = 0
+        for j, t in enumerate(times):
+            if t == now_str:
+                idx = j
+                break
+
+        speed_kmh = float(speeds[idx]) if idx < len(speeds) and speeds[idx] is not None else 0.0
+        direction = float(dirs[idx])   if idx < len(dirs)   and dirs[idx]   is not None else 0.0
+        speed_ms  = speed_kmh / 3.6
+        dir_rad   = math.radians(direction)
+        u_ms      = -speed_ms * math.sin(dir_rad)
+        v_ms      = -speed_ms * math.cos(dir_rad)
+
+        result.append({
+            "lat":           lat,
+            "lon":           lon,
+            "u_ms":          round(u_ms,       3),
+            "v_ms":          round(v_ms,       3),
+            "speed_kmh":     round(speed_kmh,  1),
+            "direction_deg": round(direction),
+        })
+
+    _cache_set(cache_key, result, ttl=1800)
+    return result
