@@ -1,93 +1,141 @@
-import React, { useState } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { createRoot } from "react-dom/client";
 import {
-  Search,
-  Star,
-  Plus,
-  Wind,
-  CloudSun,
-  CloudRain,
-  Zap,
-  Eye,
-  Thermometer,
-  Mountain,
-  Gauge,
-  Car,
-  Navigation,
-  Layers,
-  Crosshair,
-  Maximize,
-  Ruler,
-  Play,
-  Pause,
-  ChevronDown,
-  MapPin,
-  Plane,
-  BrainCircuit,
-  Clock,
-  ShieldAlert,
-  Cloud,
-  Activity
+  Search, Star, Plus, Wind, CloudSun, CloudRain, Zap, Eye,
+  Thermometer, Mountain, Gauge, Car, Navigation, Layers,
+  Crosshair, Maximize, Ruler, Play, Pause, ChevronDown,
+  MapPin, Plane, BrainCircuit, Clock, ShieldAlert, Cloud, Activity,
+  AlertTriangle, Loader
 } from "lucide-react";
 import "./styles.css";
 
-const INITIAL_SITES = [
-  { name: "Montegrappa", country: "Italy" },
-  { name: "Bassano", country: "Italy" },
-  { name: "Annecy", country: "France" },
-  { name: "Chamonix Planpraz", country: "France" },
-  { name: "Kobala", country: "Slovenia" }
-];
+// ─── API ─────────────────────────────────────────────────────────────────────
+const BASE = import.meta.env.VITE_API_URL ?? "http://127.0.0.1:8080";
 
+const api = {
+  listSites: () =>
+    fetch(`${BASE}/v1/sites`).then((r) => r.json()),
+
+  siteFlyabilityTimeline: (siteId, pilotLevel = "intermediate") =>
+    fetch(`${BASE}/v1/flyability/sites/${siteId}/timeline?pilot_level=${pilotLevel}`).then((r) => r.json()),
+
+  siteWeatherHourly: (siteId) =>
+    fetch(`${BASE}/v1/weather/sites/${siteId}/hourly`).then((r) => r.json()),
+
+  recommendations: (lat, lon, radiusKm = 180, pilotLevel = "intermediate") =>
+    fetch(
+      `${BASE}/v1/sites/recommendations?lat=${lat}&lon=${lon}&radius_km=${radiusKm}&pilot_level=${pilotLevel}`
+    ).then((r) => r.json()),
+
+  briefing: (siteId, pilotLevel = "intermediate") => {
+    const now = new Date().toISOString();
+    const end = new Date(Date.now() + 12 * 3600 * 1000).toISOString();
+    return fetch(`${BASE}/v1/briefings/site`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        question: "Is it safe to fly today?",
+        site_id: siteId,
+        pilot_profile: { pilot_level: pilotLevel },
+        start: now,
+        end,
+        include_sources: true,
+      }),
+    }).then((r) => r.json());
+  },
+};
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+const STATUS_COLOR = { GO: "green", MAYBE: "yellow", NO_GO: "red", UNKNOWN: "red" };
+
+function statusColor(status) {
+  return STATUS_COLOR[status] ?? "red";
+}
+
+function fmtTime(isoString) {
+  return new Date(isoString).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+function useAsync(asyncFn, deps) {
+  const [state, setState] = useState({ data: null, loading: true, error: null });
+  useEffect(() => {
+    let alive = true;
+    setState((s) => ({ ...s, loading: true, error: null }));
+    asyncFn()
+      .then((data) => { if (alive) setState({ data, loading: false, error: null }); })
+      .catch((err) => { if (alive) setState({ data: null, loading: false, error: err.message }); });
+    return () => { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, deps);
+  return state;
+}
+
+// ─── Layer config ─────────────────────────────────────────────────────────────
 const INITIAL_LAYERS = [
-  { id: "surfaceWind", label: "Surface Wind", icon: Wind, active: true },
-  { id: "altitudeWind", label: "Wind at Altitude", value: "1000 m", icon: Wind, active: true },
-  { id: "gusts", label: "Gusts", icon: Activity, active: false },
-  { id: "thermals", label: "Thermals", icon: Gauge, active: false },
-  { id: "cloudbase", label: "Cloudbase", icon: Cloud, active: false },
-  { id: "cape", label: "CAPE / Instability", icon: ShieldAlert, active: false },
-  { id: "rainRadar", label: "Rain Radar", icon: CloudRain, active: false },
-  { id: "lightning", label: "Lightning", icon: Zap, active: false },
-  { id: "visibility", label: "Visibility", icon: Eye, active: false },
+  { id: "surfaceWind",  label: "Surface Wind",          icon: Wind,        active: true  },
+  { id: "altitudeWind", label: "Wind at Altitude",       icon: Wind,        active: true, value: "1000 m" },
+  { id: "gusts",        label: "Gusts",                  icon: Activity,    active: false },
+  { id: "thermals",     label: "Thermals",               icon: Gauge,       active: false },
+  { id: "cloudbase",    label: "Cloudbase",              icon: Cloud,       active: false },
+  { id: "cape",         label: "CAPE / Instability",     icon: ShieldAlert, active: false },
+  { id: "rainRadar",    label: "Rain Radar",             icon: CloudRain,   active: false },
+  { id: "lightning",    label: "Lightning",              icon: Zap,         active: false },
+  { id: "visibility",   label: "Visibility",             icon: Eye,         active: false },
   { id: "tempDewpoint", label: "Temperature / Dewpoint", icon: Thermometer, active: false },
-  { id: "rotor", label: "Wave / Rotor Risk", icon: Mountain, active: false },
-  { id: "foehn", label: "Foehn Indicator", icon: Wind, active: false }
+  { id: "rotor",        label: "Wave / Rotor Risk",      icon: Mountain,    active: false },
+  { id: "foehn",        label: "Foehn Indicator",        icon: Wind,        active: false },
 ];
 
-const hourly = [
-  { t: "08:00", wind: 6, gust: 12, thermals: 1.4, cloudbase: 1200, rain: "0%" },
-  { t: "09:00", wind: 8, gust: 16, thermals: 1.8, cloudbase: 1400, rain: "0%" },
-  { t: "10:00", wind: 10, gust: 20, thermals: 2.2, cloudbase: 1600, rain: "0%" },
-  { t: "11:00", wind: 12, gust: 24, thermals: 3.0, cloudbase: 1900, rain: "0%" },
-  { t: "12:00", wind: 14, gust: 26, thermals: 3.2, cloudbase: 2200, rain: "0%" },
-  { t: "13:00", wind: 16, gust: 24, thermals: 3.1, cloudbase: 2300, rain: "0%" },
-  { t: "14:00", wind: 14, gust: 22, thermals: 2.6, cloudbase: 2000, rain: "0%" },
-  { t: "15:00", wind: 12, gust: 18, thermals: 2.0, cloudbase: 1800, rain: "0%" },
-  { t: "16:00", wind: 10, gust: 16, thermals: 1.6, cloudbase: 1500, rain: "0%" },
-  { t: "17:00", wind: 8, gust: 14, thermals: 1.2, cloudbase: 1300, rain: "0%" }
-];
+// ─── Small reusable components ────────────────────────────────────────────────
+function Spinner() {
+  return (
+    <div className="spinner-wrap">
+      <Loader size={22} className="spin" />
+    </div>
+  );
+}
 
-const markers = [
-  { left: "43%", top: "37%", type: "blue",   label: "Montegrappa", windDeg: 315, windKmh: 12 },
-  { left: "30%", top: "24%", type: "green",                         windDeg: 290, windKmh:  8 },
-  { left: "36%", top: "30%", type: "green",                         windDeg: 310, windKmh: 10 },
-  { left: "26%", top: "52%", type: "green",                         windDeg: 270, windKmh:  7 },
-  { left: "44%", top: "62%", type: "green",                         windDeg: 330, windKmh: 11 },
-  { left: "32%", top: "72%", type: "green",                         windDeg: 300, windKmh:  9 },
-  { left: "61%", top: "28%", type: "green",                         windDeg: 285, windKmh: 13 },
-  { left: "58%", top: "20%", type: "green",                         windDeg: 320, windKmh:  6 },
-  { left: "22%", top: "41%", type: "green",                         windDeg: 295, windKmh:  8 },
-  { left: "25%", top: "79%", type: "orange",                        windDeg: 215, windKmh: 22 },
-  { left: "39%", top: "29%", type: "orange",                        windDeg: 180, windKmh: 19 },
-  { left: "64%", top: "13%", type: "orange",                        windDeg: 140, windKmh: 26 }
-];
+function ErrorBanner({ message }) {
+  return (
+    <div className="errorBanner">
+      <AlertTriangle size={16} />
+      <span>{message}</span>
+    </div>
+  );
+}
 
-function Sidebar({ activeSite, onSelectSite }) {
+function WindArrow({ deg, kmh, type }) {
+  const blowTo = (deg + 180) % 360;
+  const color = type === "orange" ? "#ff8b26" : type === "blue" ? "#2f9bff" : "#61d956";
+  return (
+    <div className="windArrow" title={`Wind from ${deg}° · ${kmh} km/h`}>
+      <svg width="22" height="22" viewBox="0 0 22 22">
+        <g transform={`rotate(${blowTo} 11 11)`}>
+          <line x1="11" y1="18" x2="11" y2="4" stroke={color} strokeWidth="2" strokeLinecap="round" />
+          <polygon points="11,2 7,9 15,9" fill={color} />
+        </g>
+      </svg>
+      <span style={{ color }}>{kmh}</span>
+    </div>
+  );
+}
+
+// ─── Sidebar ─────────────────────────────────────────────────────────────────
+function Sidebar({ sites, activeSiteId, onSelectSite, bestStatus }) {
   const [layers, setLayers] = useState(INITIAL_LAYERS);
 
   function toggleLayer(id) {
-    setLayers(prev => prev.map(l => l.id === id ? { ...l, active: !l.active } : l));
+    setLayers((prev) => prev.map((l) => (l.id === id ? { ...l, active: !l.active } : l)));
   }
+
+  const driveStatus = bestStatus ?? "UNKNOWN";
+  const driveColor = statusColor(driveStatus);
+  const driveCopy = {
+    GO: "Great day ahead!\nWorth the drive.",
+    MAYBE: "Conditions marginal.\nAssess on site.",
+    NO_GO: "Unsafe today.\nStay home.",
+    UNKNOWN: "Loading…",
+  }[driveStatus];
 
   return (
     <aside className="sidebar">
@@ -98,28 +146,28 @@ function Sidebar({ activeSite, onSelectSite }) {
 
       <div className="searchBox">
         <Search size={16} />
-        <input placeholder="Search location or site..." />
+        <input placeholder="Search location or site…" />
         <kbd>⌘ K</kbd>
       </div>
 
       <div className="sideHeader">
-        <span>Favorite Sites</span>
+        <span>Launch Sites</span>
         <button className="iconButton small"><Plus size={15} /></button>
       </div>
 
       <div className="favorites">
-        {INITIAL_SITES.map((site) => (
+        {sites.map((site) => (
           <button
-            className={`favoriteItem ${activeSite === site.name ? "active" : ""}`}
-            key={site.name}
-            onClick={() => onSelectSite(site.name)}
+            className={`favoriteItem ${activeSiteId === site.id ? "active" : ""}`}
+            key={site.id}
+            onClick={() => onSelectSite(site)}
           >
             <MapPin size={14} />
             <span>
               <b>{site.name}</b>
-              <small>{site.country}</small>
+              <small>{site.region} · {site.country_code}</small>
             </span>
-            <Star size={14} className={activeSite === site.name ? "starOn" : ""} />
+            <Star size={14} className={activeSiteId === site.id ? "starOn" : ""} />
           </button>
         ))}
       </div>
@@ -154,8 +202,10 @@ function Sidebar({ activeSite, onSelectSite }) {
         <div className="driveGauge">
           <div className="gaugeArc" />
           <Car size={38} />
-          <strong>GO</strong>
-          <p>Great day ahead!<br />Worth the drive.</p>
+          <strong style={{ color: `var(--${driveColor})` }}>
+            {driveStatus.replace("_", "-")}
+          </strong>
+          <p>{driveCopy}</p>
           <a>Show details →</a>
         </div>
       </div>
@@ -163,25 +213,21 @@ function Sidebar({ activeSite, onSelectSite }) {
   );
 }
 
-function WindArrow({ deg, kmh, type }) {
-  const blowTo = (deg + 180) % 360;
-  const color = type === "orange" ? "#ff8b26" : type === "blue" ? "#2f9bff" : "#61d956";
-  return (
-    <div className="windArrow" title={`Wind from ${deg}° · ${kmh} km/h`}>
-      <svg width="22" height="22" viewBox="0 0 22 22">
-        <g transform={`rotate(${blowTo} 11 11)`}>
-          <line x1="11" y1="18" x2="11" y2="4" stroke={color} strokeWidth="2" strokeLinecap="round" />
-          <polygon points="11,2 7,9 15,9" fill={color} />
-        </g>
-      </svg>
-      <span style={{ color }}>{kmh}</span>
-    </div>
-  );
-}
+// ─── Map ─────────────────────────────────────────────────────────────────────
+const MAP_MARKERS = [
+  { left: "43%", top: "37%", type: "blue",   windDeg: 315, windKmh: 12, label: "Vaga Launch" },
+  { left: "30%", top: "24%", type: "green",  windDeg: 290, windKmh:  8 },
+  { left: "36%", top: "30%", type: "green",  windDeg: 310, windKmh: 10 },
+  { left: "26%", top: "52%", type: "green",  windDeg: 270, windKmh:  7 },
+  { left: "44%", top: "62%", type: "green",  windDeg: 330, windKmh: 11 },
+  { left: "61%", top: "28%", type: "green",  windDeg: 285, windKmh: 13 },
+  { left: "25%", top: "79%", type: "orange", windDeg: 215, windKmh: 22 },
+  { left: "64%", top: "13%", type: "orange", windDeg: 140, windKmh: 26 },
+];
 
-function MapCanvas() {
+function MapCanvas({ weather }) {
   const [altitude, setAltitude] = useState("1000 m");
-  const [airspace, setAirspace] = useState(true);
+  const [airspace, setAirspace]  = useState(true);
 
   return (
     <main className="mapShell">
@@ -206,29 +252,29 @@ function MapCanvas() {
           ))}
         </div>
 
-        <div className="airspaceChip" onClick={() => setAirspace(v => !v)} style={{ cursor: "pointer" }}>
+        <div className="airspaceChip" onClick={() => setAirspace((v) => !v)} style={{ cursor: "pointer" }}>
           Airspace <strong>{airspace ? "ON" : "OFF"}</strong> <ChevronDown size={13} />
         </div>
 
         {airspace && (
           <>
-            <div className="airspaceZone zoneOne">FL195<br />FL95</div>
-            <div className="airspaceZone zoneTwo">CTR MILANO<br />SFC - 3500ft</div>
+            <div className="airspaceZone zoneOne">TMA OSLO<br />SFC–FL095</div>
+            <div className="airspaceZone zoneTwo">CTR FAGERNES<br />SFC–3500ft</div>
           </>
         )}
 
         <div className="mapLabels">
-          <span style={{ left: "10%", top: "12%" }}>Lake Geneva</span>
-          <span style={{ left: "20%", top: "24%" }}>Chamonix</span>
-          <span style={{ left: "30%", top: "37%" }}>Aosta</span>
-          <span style={{ left: "58%", top: "38%" }}>Biella</span>
-          <span style={{ left: "68%", top: "53%" }}>Novara</span>
-          <span style={{ left: "76%", top: "48%" }}>Milan</span>
-          <span style={{ left: "50%", top: "64%" }}>Torino</span>
-          <span style={{ left: "73%", top: "80%" }}>Genova</span>
+          <span style={{ left: "10%", top: "12%" }}>Jotunheimen</span>
+          <span style={{ left: "20%", top: "24%" }}>Vågå</span>
+          <span style={{ left: "30%", top: "37%" }}>Lillehammer</span>
+          <span style={{ left: "58%", top: "38%" }}>Hafjell</span>
+          <span style={{ left: "68%", top: "53%" }}>Gjøvik</span>
+          <span style={{ left: "76%", top: "48%" }}>Oslo</span>
+          <span style={{ left: "50%", top: "64%" }}>Kongsberg</span>
+          <span style={{ left: "73%", top: "80%" }}>Drammen</span>
         </div>
 
-        {markers.map((m, idx) => (
+        {MAP_MARKERS.map((m, idx) => (
           <div className="siteMarkerWrap" style={{ left: m.left, top: m.top }} key={idx}>
             <div className={`siteMarker ${m.type}`}>
               <Plane size={15} />
@@ -250,29 +296,42 @@ function MapCanvas() {
         </div>
       </div>
 
-      <Timeline />
+      <Timeline weather={weather} />
     </main>
   );
 }
 
-function Timeline() {
+// ─── Timeline ────────────────────────────────────────────────────────────────
+function Timeline({ weather }) {
   const [range, setRange] = useState("1D");
   const [playing, setPlaying] = useState(false);
-  const times = ["02:00", "05:00", "08:00", "11:00", "14:00", "17:00", "20:00", "23:00"];
+
+  const hours = weather ?? [];
+  const times = hours.length
+    ? hours.map((h) => fmtTime(h.valid_time))
+    : ["02:00", "05:00", "08:00", "11:00", "14:00", "17:00", "20:00", "23:00"];
+
+  const winds      = hours.map((h) => Math.round(h.wind_kmh));
+  const gusts      = hours.map((h) => Math.round(h.gust_kmh));
+  const thermals   = hours.map((h) => h.thermal_strength_ms?.toFixed(1) ?? "—");
+  const cloudbases = hours.map((h) => h.cloudbase_msl_m);
 
   return (
     <section className="timelinePanel">
       <div className="timelineTop">
-        <button className="dateButton">Today <small>Thu 22 May</small> <ChevronDown size={14} /></button>
-        <button className="playButton" onClick={() => setPlaying(v => !v)}>
+        <button className="dateButton">
+          Today <small>{new Date().toLocaleDateString([], { weekday: "short", day: "numeric", month: "short" })}</small>{" "}
+          <ChevronDown size={14} />
+        </button>
+        <button className="playButton" onClick={() => setPlaying((v) => !v)}>
           {playing ? <Pause size={17} fill="currentColor" /> : <Play size={17} fill="currentColor" />}
         </button>
         <div className="timeTrack">
-          {times.map((t) => <span key={t}>{t}</span>)}
-          <div className="currentTime"><b>11:00</b></div>
+          {(hours.length ? times.slice(0, 8) : times).map((t) => <span key={t}>{t}</span>)}
+          <div className="currentTime"><b>{times[0] ?? "—"}</b></div>
         </div>
         <div className="rangeButtons">
-          {["1D", "3D", "5D"].map(r => (
+          {["1D", "3D", "5D"].map((r) => (
             <button key={r} className={range === r ? "active" : ""} onClick={() => setRange(r)}>{r}</button>
           ))}
           <button><Layers size={16} /></button>
@@ -280,10 +339,10 @@ function Timeline() {
       </div>
 
       <div className="timelineRows">
-        <WeatherStrip label="Wind (km/h)" values={[6,8,10,12,14,16,14,10,6,4]} />
-        <WeatherStrip label="Gusts (km/h)" values={[12,14,18,22,24,26,22,18,14,10]} />
-        <WeatherStrip label="Thermals (m/s)" values={[0.6,0.9,1.4,2.2,3.0,3.2,2.4,1.6,1.0,0.6]} />
-        <WeatherStrip label="Cloud base (m)" values={[800,1000,1300,1600,1900,2100,1800,1400,1000,800]} />
+        <WeatherStrip label="Wind (km/h)"     values={winds.length      ? winds      : [6,8,10,12,14,16,14,10,6,4]} />
+        <WeatherStrip label="Gusts (km/h)"    values={gusts.length      ? gusts      : [12,14,18,22,24,26,22,18,14,10]} />
+        <WeatherStrip label="Thermals (m/s)"  values={thermals.length   ? thermals   : [0.6,0.9,1.4,2.2,3.0,3.2,2.4,1.6,1.0,0.6]} />
+        <WeatherStrip label="Cloud base (m)"  values={cloudbases.length ? cloudbases : [800,1000,1300,1600,1900,2100,1800,1400,1000,800]} />
       </div>
     </section>
   );
@@ -293,110 +352,14 @@ function WeatherStrip({ label, values }) {
   return (
     <div className="weatherStrip">
       <span>{label}</span>
-      <div className="stripGradient">
+      <div className="legendGradient stripGradient" style={{ gridTemplateColumns: `repeat(${values.length}, 1fr)` }}>
         {values.map((v, idx) => <b key={idx}>{v}</b>)}
       </div>
     </div>
   );
 }
 
-const SITE_DATA = {
-  Montegrappa: { country: "Italy", flyability: 82, risk: 26, wind: 12, gust: 24, windDir: "NW", cloudbase: 1950, thermals: "Strong", thermalsMs: 3.2, window: "11:00 – 15:00", status: "GO", statusNote: "Excellent conditions" },
-  Bassano:     { country: "Italy", flyability: 74, risk: 34, wind: 14, gust: 28, windDir: "N",  cloudbase: 1700, thermals: "Moderate", thermalsMs: 2.4, window: "12:00 – 16:00", status: "GO", statusNote: "Good conditions" },
-  Annecy:      { country: "France", flyability: 58, risk: 48, wind: 18, gust: 34, windDir: "SW", cloudbase: 1400, thermals: "Weak", thermalsMs: 1.2, window: "13:00 – 15:00", status: "MAYBE", statusNote: "Check wind before launch" },
-  "Chamonix Planpraz": { country: "France", flyability: 31, risk: 72, wind: 32, gust: 48, windDir: "W", cloudbase: 900, thermals: "None", thermalsMs: 0, window: "—", status: "NO_GO", statusNote: "Wind too strong" },
-  Kobala:      { country: "Slovenia", flyability: 68, risk: 38, wind: 10, gust: 20, windDir: "NE", cloudbase: 1600, thermals: "Moderate", thermalsMs: 2.1, window: "11:00 – 14:00", status: "GO", statusNote: "Good morning window" },
-};
-
-const STATUS_COLOR = { GO: "green", MAYBE: "yellow", NO_GO: "red" };
-
-function RightPanel({ site, onClose }) {
-  const [tab, setTab] = useState("Overview");
-  const data = SITE_DATA[site] || SITE_DATA["Montegrappa"];
-  const color = STATUS_COLOR[data.status] || "green";
-
-  return (
-    <aside className="rightPanel">
-      <div className="siteTitle">
-        <div>
-          <h1><Star size={18} fill="currentColor" /> {site}</h1>
-          <small>{data.country}</small>
-        </div>
-        <button onClick={onClose}>×</button>
-      </div>
-
-      <nav className="tabs">
-        {["Overview", "Forecast", "Details", "Notes"].map(t => (
-          <button key={t} className={tab === t ? "active" : ""} onClick={() => setTab(t)}>{t}</button>
-        ))}
-      </nav>
-
-      {tab === "Overview" && (
-        <>
-          <div className="metricGrid">
-            <Metric title="Flyability Score" value={data.flyability} suffix="/100" note={data.flyability >= 75 ? "Excellent day!" : data.flyability >= 55 ? "Good day" : "Marginal"} ring={data.flyability >= 70 ? "green" : data.flyability >= 50 ? "yellow" : "red"} />
-            <Metric title="Risk Score" value={data.risk} suffix="/100" note={data.risk <= 30 ? "Low risk" : data.risk <= 55 ? "Moderate risk" : "High risk"} ring={data.risk <= 30 ? "yellow" : "red"} />
-            <Metric title="Wind at Launch" value={data.wind} suffix="km/h" note={data.windDir} icon={<Wind size={22} />} />
-            <Metric title="Gusts" value={data.gust} suffix="km/h" note="" icon={<Activity size={22} />} />
-            <Metric title="Cloudbase" value={data.cloudbase} suffix="m" note="AGL" icon={<CloudSun size={23} />} />
-            <Metric title="Thermals" value={data.thermals} suffix={`${data.thermalsMs} m/s`} note="" icon={<Gauge size={23} />} />
-          </div>
-
-          <div className="launchWindow">
-            <span>Best launch window</span>
-            <strong>{data.window}</strong>
-            <small>Local time</small>
-          </div>
-
-          <button className={`goBar ${color}`}>
-            <Clock size={20} /> <b>{data.status.replace("_", "-")}</b> {data.statusNote} <ChevronDown size={16} />
-          </button>
-
-          <MiniForecast />
-
-          <div className="aiCard">
-            <h3><BrainCircuit size={20} /> AI Flight Briefing <em>BETA</em></h3>
-            <p>
-              {data.status === "GO"
-                ? "High pressure and strong insolation should generate excellent thermals by late morning. Light winds at launch with stable conditions. Great day for XC."
-                : data.status === "MAYBE"
-                ? "Conditions are marginal. Wind speeds are elevated and cloudbase is lower than ideal. Monitor conditions closely before committing to launch."
-                : "Conditions are unsafe for flight today. Strong winds and low cloudbase create serious hazards. Do not launch."}
-            </p>
-            <div className="confidence">
-              <span>Confidence: <b>{data.flyability >= 70 ? "High" : data.flyability >= 50 ? "Medium" : "Low"}</b></span>
-              <div><i /></div>
-              <strong>{data.flyability >= 70 ? "92%" : data.flyability >= 50 ? "74%" : "58%"}</strong>
-            </div>
-          </div>
-        </>
-      )}
-
-      {tab === "Forecast" && (
-        <div style={{ padding: "1rem" }}>
-          <MiniForecast />
-        </div>
-      )}
-
-      {tab === "Details" && (
-        <div style={{ padding: "1rem", color: "var(--text-muted)", fontSize: "0.85rem", lineHeight: 1.7 }}>
-          <p><b>Wind:</b> {data.wind} km/h {data.windDir} · Gusts {data.gust} km/h</p>
-          <p><b>Cloudbase:</b> {data.cloudbase} m AGL</p>
-          <p><b>Thermals:</b> {data.thermals} ({data.thermalsMs} m/s)</p>
-          <p><b>Flyability:</b> {data.flyability}/100 · Risk: {data.risk}/100</p>
-          <p><b>Best window:</b> {data.window}</p>
-        </div>
-      )}
-
-      {tab === "Notes" && (
-        <div style={{ padding: "1rem", color: "var(--text-muted)", fontSize: "0.85rem" }}>
-          <p>No notes for this site yet.</p>
-        </div>
-      )}
-    </aside>
-  );
-}
-
+// ─── Right Panel ─────────────────────────────────────────────────────────────
 function Metric({ title, value, suffix, note, ring, icon }) {
   return (
     <div className="metricCard">
@@ -411,48 +374,280 @@ function Metric({ title, value, suffix, note, ring, icon }) {
   );
 }
 
-function MiniForecast() {
+function HourlyForecast({ weather }) {
+  if (!weather || !weather.length) return null;
   return (
     <div className="miniForecast">
-      <h3>Today, 22 May</h3>
+      <h3>Today · {new Date().toLocaleDateString([], { day: "numeric", month: "short" })}</h3>
       <div className="forecastTable">
         <div className="forecastRow head">
           <span />
-          {hourly.map((h) => <b key={h.t}>{h.t}</b>)}
+          {weather.map((h) => <b key={h.valid_time}>{fmtTime(h.valid_time)}</b>)}
         </div>
-        <div className="forecastRow icons">
-          <span />
-          {hourly.map((h, i) => <b key={h.t}>{i < 3 ? "☀️" : "🌤️"}</b>)}
+        <div className="forecastRow">
+          <span>km/h</span>
+          {weather.map((h) => <b key={h.valid_time}>{Math.round(h.wind_kmh)}</b>)}
         </div>
-        <ForecastRow label="km/h" field="wind" />
-        <ForecastRow label="gusts" field="gust" highlight />
-        <ForecastRow label="thermals" field="thermals" highlight />
-        <ForecastRow label="cloud base" field="cloudbase" />
-        <ForecastRow label="rain" field="rain" />
+        <div className="forecastRow">
+          <span>gusts</span>
+          {weather.map((h, i) => <b key={h.valid_time} className={i >= 1 ? "good" : ""}>{Math.round(h.gust_kmh)}</b>)}
+        </div>
+        <div className="forecastRow">
+          <span>thermals</span>
+          {weather.map((h, i) => <b key={h.valid_time} className={i >= 1 ? "good" : ""}>{h.thermal_strength_ms?.toFixed(1) ?? "—"}</b>)}
+        </div>
+        <div className="forecastRow">
+          <span>cloud base</span>
+          {weather.map((h) => <b key={h.valid_time}>{h.cloudbase_msl_m}</b>)}
+        </div>
+        <div className="forecastRow">
+          <span>rain mm</span>
+          {weather.map((h) => <b key={h.valid_time}>{h.rain_mm}</b>)}
+        </div>
       </div>
     </div>
   );
 }
 
-function ForecastRow({ label, field, highlight }) {
+function BlockerList({ blockers }) {
+  if (!blockers || !blockers.length) return null;
   return (
-    <div className="forecastRow">
-      <span>{label}</span>
-      {hourly.map((h, i) => (
-        <b className={highlight && i >= 3 && i <= 7 ? "good" : ""} key={h.t}>{h[field]}</b>
+    <div className="blockerList">
+      {blockers.map((b, i) => (
+        <div key={i} className={`blocker ${b.severity}`}>
+          <AlertTriangle size={13} />
+          <span>{b.message}</span>
+        </div>
       ))}
     </div>
   );
 }
 
+function RightPanel({ site, onClose }) {
+  const [tab, setTab] = useState("Overview");
+
+  const { data: timeline, loading: tlLoading, error: tlError } =
+    useAsync(() => api.siteFlyabilityTimeline(site.id), [site.id]);
+
+  const { data: weather, loading: wxLoading, error: wxError } =
+    useAsync(() => api.siteWeatherHourly(site.id), [site.id]);
+
+  const { data: briefingData, loading: brLoading, error: brError } =
+    useAsync(() => api.briefing(site.id), [site.id]);
+
+  const decision = timeline?.[0];
+  const color = statusColor(decision?.status);
+  const fi = decision?.flyability_score ?? 0;
+
+  return (
+    <aside className="rightPanel">
+      <div className="siteTitle">
+        <div>
+          <h1><Star size={18} fill="currentColor" /> {site.name}</h1>
+          <small>{site.region} · {site.country_code} · {site.altitude_m} m</small>
+        </div>
+        <button onClick={onClose}>×</button>
+      </div>
+
+      <nav className="tabs">
+        {["Overview", "Forecast", "Details", "Notes"].map((t) => (
+          <button key={t} className={tab === t ? "active" : ""} onClick={() => setTab(t)}>{t}</button>
+        ))}
+      </nav>
+
+      {tab === "Overview" && (
+        <>
+          {tlLoading && <Spinner />}
+          {tlError && <ErrorBanner message={`Flyability error: ${tlError}`} />}
+
+          {decision && (
+            <>
+              <div className="metricGrid">
+                <Metric
+                  title="Flyability Score" value={fi} suffix="/100"
+                  note={fi >= 75 ? "Excellent day!" : fi >= 55 ? "Good day" : "Marginal"}
+                  ring={fi >= 70 ? "green" : fi >= 50 ? "yellow" : "red"}
+                />
+                <Metric
+                  title="Risk Score" value={decision.safety_score} suffix="/100"
+                  note={decision.safety_score >= 70 ? "Low risk" : decision.safety_score >= 50 ? "Moderate risk" : "High risk"}
+                  ring={decision.safety_score >= 70 ? "yellow" : "red"}
+                />
+                <Metric
+                  title="Wind at Launch" value={Math.round(decision.wind_kmh)} suffix="km/h"
+                  note={`From ${decision.wind_direction_deg}°`} icon={<Wind size={22} />}
+                />
+                <Metric
+                  title="Gusts" value={Math.round(decision.gust_kmh)} suffix="km/h"
+                  icon={<Activity size={22} />}
+                />
+                <Metric
+                  title="Cloudbase" value={decision.cloudbase_msl_m} suffix="m"
+                  note="MSL" icon={<CloudSun size={23} />}
+                />
+                <Metric
+                  title="Thermals" value={decision.thermal_strength_ms?.toFixed(1) ?? "—"} suffix="m/s"
+                  icon={<Gauge size={23} />}
+                />
+              </div>
+
+              <BlockerList blockers={decision.blockers} />
+
+              <button className={`goBar ${color}`}>
+                <Clock size={20} />
+                <b>{decision.status.replace("_", "-")}</b>
+                <span style={{ flex: 1, fontSize: 13 }}>
+                  {decision.explanation?.[0] ?? ""}
+                </span>
+                <ChevronDown size={16} />
+              </button>
+            </>
+          )}
+
+          {wxLoading && <Spinner />}
+          {wxError && <ErrorBanner message={`Weather error: ${wxError}`} />}
+          {weather && <HourlyForecast weather={weather} />}
+
+          <div className="aiCard">
+            <h3><BrainCircuit size={20} /> AI Flight Briefing <em>BETA</em></h3>
+            {brLoading && <p style={{ color: "var(--muted)", fontSize: 13 }}>Generating briefing…</p>}
+            {brError && <ErrorBanner message={`Briefing error: ${brError}`} />}
+            {briefingData && (
+              <>
+                <p>{briefingData.answer}</p>
+                {briefingData.safety_footer && (
+                  <p style={{ fontSize: 11, color: "var(--muted)", marginTop: 8 }}>
+                    ⚠ {briefingData.safety_footer}
+                  </p>
+                )}
+                {briefingData.follow_up_actions?.length > 0 && (
+                  <ul className="followUpList">
+                    {briefingData.follow_up_actions.map((a, i) => <li key={i}>{a}</li>)}
+                  </ul>
+                )}
+                <div className="confidence">
+                  <span>Confidence: <b>{Math.round(briefingData.confidence * 100)}%</b></span>
+                  <div><i style={{ width: `${Math.round(briefingData.confidence * 100)}%` }} /></div>
+                  <strong>{Math.round(briefingData.confidence * 100)}%</strong>
+                </div>
+              </>
+            )}
+          </div>
+        </>
+      )}
+
+      {tab === "Forecast" && (
+        <>
+          {wxLoading && <Spinner />}
+          {wxError && <ErrorBanner message={wxError} />}
+          {weather && <HourlyForecast weather={weather} />}
+          {timeline && (
+            <div className="miniForecast" style={{ marginTop: 12 }}>
+              <h3>Flyability Timeline</h3>
+              <div className="forecastTable">
+                <div className="forecastRow head">
+                  <span />
+                  {timeline.map((h) => <b key={h.valid_time}>{fmtTime(h.valid_time)}</b>)}
+                </div>
+                <div className="forecastRow">
+                  <span>status</span>
+                  {timeline.map((h) => (
+                    <b key={h.valid_time} style={{ color: `var(--${statusColor(h.status)})`, fontSize: 10 }}>
+                      {h.status.replace("_", "-")}
+                    </b>
+                  ))}
+                </div>
+                <div className="forecastRow">
+                  <span>fly</span>
+                  {timeline.map((h) => <b key={h.valid_time}>{h.flyability_score}</b>)}
+                </div>
+                <div className="forecastRow">
+                  <span>safety</span>
+                  {timeline.map((h) => <b key={h.valid_time}>{h.safety_score}</b>)}
+                </div>
+              </div>
+            </div>
+          )}
+        </>
+      )}
+
+      {tab === "Details" && (
+        <div style={{ padding: "1rem", color: "var(--text-muted)", fontSize: "0.85rem", lineHeight: 1.7 }}>
+          <p><b>Altitude:</b> {site.altitude_m} m</p>
+          <p><b>Safe sectors:</b> {site.safe_directions?.join(", ")}</p>
+          <p><b>Difficulty:</b> {site.difficulty}</p>
+          {site.hazards?.length > 0 && <p><b>Hazards:</b> {site.hazards.join(" · ")}</p>}
+          {site.local_rules?.length > 0 && <p><b>Rules:</b> {site.local_rules.join(" · ")}</p>}
+          {decision && (
+            <>
+              <p><b>Wind:</b> {Math.round(decision.wind_kmh)} km/h from {decision.wind_direction_deg}° · Gusts {Math.round(decision.gust_kmh)} km/h</p>
+              <p><b>Cloudbase:</b> {decision.cloudbase_msl_m} m MSL</p>
+              <p><b>Thermals:</b> {decision.thermal_strength_ms?.toFixed(1) ?? "—"} m/s</p>
+              <p><b>Flyability:</b> {decision.flyability_score}/100 · Safety: {decision.safety_score}/100</p>
+            </>
+          )}
+        </div>
+      )}
+
+      {tab === "Notes" && (
+        <div style={{ padding: "1rem", color: "var(--text-muted)", fontSize: "0.85rem" }}>
+          <p>No notes for this site yet.</p>
+        </div>
+      )}
+    </aside>
+  );
+}
+
+// ─── App ─────────────────────────────────────────────────────────────────────
 function App() {
-  const [activeSite, setActiveSite] = useState("Montegrappa");
+  const { data: sites, loading, error } = useAsync(api.listSites, []);
+  const [activeSite, setActiveSite] = useState(null);
+
+  // auto-select first site once loaded
+  useEffect(() => {
+    if (sites?.length && !activeSite) setActiveSite(sites[0]);
+  }, [sites]);
+
+  // derive best overall status for Drive card
+  const [bestStatus, setBestStatus] = useState(null);
+  useEffect(() => {
+    if (!activeSite) return;
+    api.siteFlyabilityTimeline(activeSite.id)
+      .then((tl) => setBestStatus(tl?.[0]?.status ?? "UNKNOWN"))
+      .catch(() => setBestStatus("UNKNOWN"));
+  }, [activeSite?.id]);
+
+  if (loading) return (
+    <div style={{ display: "grid", placeItems: "center", height: "100vh", background: "#07111f", color: "#edf7ff" }}>
+      <div style={{ textAlign: "center", display: "flex", flexDirection: "column", alignItems: "center", gap: 14 }}>
+        <Loader size={32} className="spin" />
+        <span style={{ fontSize: 14, opacity: 0.7 }}>Loading launch sites…</span>
+      </div>
+    </div>
+  );
+
+  if (error) return (
+    <div style={{ display: "grid", placeItems: "center", height: "100vh", background: "#07111f", color: "#ff4f69" }}>
+      <div style={{ textAlign: "center" }}>
+        <AlertTriangle size={32} />
+        <p style={{ marginTop: 10 }}>Could not reach the SkyThermal API.</p>
+        <p style={{ fontSize: 12, opacity: 0.6 }}>Is the backend running on {BASE}?</p>
+      </div>
+    </div>
+  );
 
   return (
     <div className="app">
-      <Sidebar activeSite={activeSite} onSelectSite={setActiveSite} />
-      <MapCanvas />
-      <RightPanel site={activeSite} onClose={() => setActiveSite(null)} />
+      <Sidebar
+        sites={sites ?? []}
+        activeSiteId={activeSite?.id}
+        onSelectSite={setActiveSite}
+        bestStatus={bestStatus}
+      />
+      <MapCanvas weather={null} />
+      {activeSite && (
+        <RightPanel site={activeSite} onClose={() => setActiveSite(null)} />
+      )}
     </div>
   );
 }
