@@ -1,18 +1,31 @@
 
 :root {
   color-scheme: dark;
-  --bg: #07111f;
-  --panel: rgba(7, 18, 31, 0.88);
-  --panel2: rgba(10, 25, 43, 0.78);
-  --stroke: rgba(170, 216, 255, 0.13);
-  --text: #edf7ff;
-  --muted: #8fa8bc;
-  --blue: #2f9bff;
-  --green: #67d66d;
-  --yellow: #ffd64a;
-  --orange: #ff8c3a;
-  --red: #ff4f69;
-  --purple: #8e3ffc;
+  /* PDF §18 design tokens */
+  --bg:        #06101d;
+  --bg-app:    #06101d;
+  --panel:     rgba(7, 18, 31, 0.88);
+  --panel2:    rgba(10, 25, 43, 0.78);
+  --stroke:    rgba(170, 216, 255, 0.13);
+  --text:      #edf7ff;
+  --text-main: #edf7ff;
+  --text-muted:#8fa8bc;
+  --muted:     #8fa8bc;
+  --blue:      #2f9bff;
+  --green:     #43b547;
+  --yellow:    #f2b632;
+  --orange:    #ff8c3a;
+  --red:       #e84d5b;
+  --purple:    #8e3ffc;
+  /* Wind speed color scale */
+  --wind-0:  #267bd4;
+  --wind-10: #1cc0b2;
+  --wind-20: #59c55a;
+  --wind-30: #d2bd32;
+  --wind-40: #f1852d;
+  --wind-50: #dd484a;
+  --wind-60: #c33190;
+  --wind-80: #732bce;
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
@@ -40,9 +53,7 @@ button {
   grid-template-columns: 280px 1fr 430px;
   height: 100vh;
   min-width: 1200px;
-  background:
-    radial-gradient(circle at 50% 10%, rgba(38, 136, 255, 0.16), transparent 30%),
-    #06101d;
+  background: var(--bg-app);
 }
 
 .sidebar, .rightPanel {
@@ -274,42 +285,58 @@ button {
   overflow: hidden;
 }
 
-.mapBackground {
+/* Real MapLibre map replaces CSS gradient */
+.mapContainer {
   position: absolute;
   inset: 0 0 182px;
   overflow: hidden;
-  background:
-    radial-gradient(circle at 29% 39%, rgba(255,255,255,0.72), transparent 10%),
-    radial-gradient(circle at 25% 50%, rgba(44, 72, 91, 0.7), transparent 24%),
-    linear-gradient(125deg, rgba(19,101,150,.9), rgba(73,165,104,.82) 33%, rgba(229,184,57,.9) 58%, rgba(209,74,161,.95) 100%);
 }
 
-.mapBackground::before {
-  content: "";
-  position: absolute;
-  inset: -10%;
-  background:
-    repeating-linear-gradient(112deg, rgba(255,255,255,0.23) 0 1px, transparent 1px 18px),
-    repeating-linear-gradient(36deg, rgba(0,0,0,0.13) 0 1px, transparent 1px 22px),
-    radial-gradient(circle at 24% 38%, rgba(0,0,0,0.42), transparent 16%),
-    radial-gradient(circle at 45% 28%, rgba(0,0,0,0.24), transparent 18%),
-    radial-gradient(circle at 68% 72%, rgba(0,0,0,0.2), transparent 18%);
-  opacity: .56;
-  filter: blur(.2px);
+/* MapLibre overrides */
+.mapContainer .maplibregl-canvas-container,
+.mapContainer .maplibregl-canvas {
+  width: 100% !important;
+  height: 100% !important;
 }
 
-.mapBackground::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background-image:
-    radial-gradient(ellipse at 20% 48%, rgba(255,255,255,.75) 0 2px, transparent 2px),
-    radial-gradient(ellipse at 28% 54%, rgba(255,255,255,.45) 0 1px, transparent 2px),
-    linear-gradient(80deg, transparent 48%, rgba(255,255,255,0.22) 50%, transparent 52%);
-  background-size: 90px 46px, 120px 80px, 80px 18px;
-  mix-blend-mode: screen;
-  opacity: .48;
+.mapContainer .maplibregl-ctrl-attrib {
+  background: rgba(5, 14, 24, 0.7);
+  color: var(--muted);
+  font-size: 9px;
 }
+
+.mapContainer .maplibregl-ctrl-attrib a { color: #6ba0c4; }
+
+.mapContainer .maplibregl-ctrl-group {
+  background: rgba(5, 17, 31, .82);
+  border: 1px solid rgba(255,255,255,.14);
+  border-radius: 9px;
+}
+
+.mapContainer .maplibregl-ctrl-group button {
+  background: transparent;
+  color: var(--text);
+  width: 32px;
+  height: 32px;
+}
+
+.mapContainer .maplibregl-ctrl-group button:hover {
+  background: rgba(255,255,255,0.08);
+}
+
+.mapContainer .maplibregl-ctrl-group button span {
+  filter: invert(1);
+}
+
+.mapContainer .maplibregl-ctrl-scale {
+  background: rgba(5,14,24,0.65);
+  border-color: rgba(255,255,255,.25);
+  color: var(--text);
+  font-size: 10px;
+}
+
+/* Hide MapLibre's default compass — we have our own controls */
+.mapContainer .maplibregl-ctrl-top-right { display: none; }
 
 .topLegend {
   position: absolute;
@@ -431,68 +458,67 @@ button {
   transform: rotate(-8deg);
 }
 
-.mapLabels span {
-  position: absolute;
-  z-index: 2;
-  font-size: 13px;
-  color: rgba(255,255,255,.83);
-  text-shadow: 0 2px 5px rgba(0,0,0,.9);
+/* ── MapLibre custom markers ─────────────────────────────────────────────── */
+.ml-marker {
+  position: relative;
+  width: 30px;
+  height: 30px;
+  cursor: pointer;
+  user-select: none;
 }
 
-.siteMarkerWrap {
-  position: absolute;
-  z-index: 3;
-  transform: translate(-50%, -50%);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 2px;
-}
-
-.siteMarker {
-  width: 28px;
-  height: 28px;
-  display: grid;
-  place-items: center;
-  border: 3px solid rgba(255,255,255,.95);
+.ml-pin {
+  width: 30px;
+  height: 30px;
   border-radius: 50% 50% 50% 0;
   transform: rotate(-45deg);
-  box-shadow: 0 3px 12px rgba(0,0,0,.4);
+  border: 2.5px solid rgba(255,255,255,.9);
+  display: grid;
+  place-items: center;
+  box-shadow: 0 3px 14px rgba(0,0,0,.55);
+  transition: box-shadow 0.15s, border-color 0.15s;
 }
 
-.windArrow {
+.ml-pin svg { transform: rotate(45deg); }
+
+.ml-marker.is-active .ml-pin {
+  border-color: #fff;
+  box-shadow: 0 0 0 3px rgba(47,155,255,.55), 0 4px 16px rgba(0,0,0,.55);
+}
+
+.ml-wind {
+  position: absolute;
+  bottom: calc(100% + 2px);
+  left: 50%;
+  transform: translateX(-50%);
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 0;
   pointer-events: none;
+  gap: 0;
 }
 
-.windArrow span {
-  font-size: 9px;
+.ml-wind-spd {
+  font-size: 8px;
   font-weight: 700;
   line-height: 1;
-  text-shadow: 0 1px 3px rgba(0,0,0,.8);
+  text-shadow: 0 1px 4px rgba(0,0,0,.9);
 }
 
-.siteMarker { position: relative; }
-.siteMarker svg { transform: rotate(45deg); }
-.siteMarker.green { background: #61d956; }
-.siteMarker.orange { background: #ff8b26; }
-.siteMarker.blue { background: var(--blue); }
-
-.siteMarker span {
+.ml-label {
   position: absolute;
-  left: 28px;
-  top: 22px;
-  transform: rotate(45deg);
-  background: rgba(2,12,22,.78);
-  border: 1px solid rgba(255,255,255,.16);
-  color: white;
+  top: calc(100% + 5px);
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(3,12,22,.85);
+  border: 1px solid rgba(255,255,255,.17);
+  color: #edf7ff;
   border-radius: 5px;
-  padding: 3px 8px;
-  font-size: 12px;
+  padding: 2px 7px;
+  font-size: 11px;
   white-space: nowrap;
+  pointer-events: none;
+  box-shadow: 0 2px 8px rgba(0,0,0,.4);
 }
 
 .mapControls {
