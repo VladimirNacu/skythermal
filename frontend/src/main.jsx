@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from "react";
+import React, { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { createRoot } from "react-dom/client";
 import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
@@ -15,13 +15,17 @@ import "./styles.css";
 const BASE = import.meta.env.VITE_API_URL ?? "http://127.0.0.1:8080";
 
 const api = {
-  listSites: () => fetch(`${BASE}/v1/sites`).then(r => r.json()),
+  listSites: (q) => {
+    const url = new URL(`${BASE}/v1/sites`, window.location.origin);
+    if (q) url.searchParams.set("q", q);
+    return fetch(url).then(r => r.json());
+  },
 
-  siteFlyabilityTimeline: (siteId, pilotLevel = "intermediate") =>
-    fetch(`${BASE}/v1/flyability/sites/${siteId}/timeline?pilot_level=${pilotLevel}`).then(r => r.json()),
+  siteFlyabilityTimeline: (siteId, pilotLevel = "intermediate", days = 1) =>
+    fetch(`${BASE}/v1/flyability/sites/${siteId}/timeline?pilot_level=${pilotLevel}&days=${days}`).then(r => r.json()),
 
-  siteWeatherHourly: (siteId) =>
-    fetch(`${BASE}/v1/weather/sites/${siteId}/hourly`).then(r => r.json()),
+  siteWeatherHourly: (siteId, days = 1) =>
+    fetch(`${BASE}/v1/weather/sites/${siteId}/hourly?days=${days}`).then(r => r.json()),
 
   recommendations: (lat, lon, radiusKm = 400, pilotLevel = "intermediate") =>
     fetch(`${BASE}/v1/sites/recommendations?lat=${lat}&lon=${lon}&radius_km=${radiusKm}&pilot_level=${pilotLevel}`).then(r => r.json()),
@@ -147,7 +151,7 @@ function ErrorBanner({ message }) {
 }
 
 // ─── Sidebar ─────────────────────────────────────────────────────────────────
-function Sidebar({ sites, activeSiteId, onSelectSite, bestStatus, mapState, onMapStateChange }) {
+function Sidebar({ sites, activeSiteId, onSelectSite, bestStatus, mapState, onMapStateChange, searchQuery, onSearchChange }) {
   const driveStatus = bestStatus ?? "UNKNOWN";
   const driveColor  = statusColor(driveStatus);
   const driveCopy   = {
@@ -166,7 +170,11 @@ function Sidebar({ sites, activeSiteId, onSelectSite, bestStatus, mapState, onMa
 
       <div className="searchBox">
         <Search size={16} />
-        <input placeholder="Search location or site…" />
+        <input
+          placeholder="Search location or site…"
+          value={searchQuery}
+          onChange={e => onSearchChange(e.target.value)}
+        />
         <kbd>⌘ K</kbd>
       </div>
 
@@ -349,7 +357,7 @@ function MapLibreMap({ sites, activeSiteId, onSelectSite, siteStatuses, onMapRea
 }
 
 // ─── Map Canvas (overlays + timeline) ────────────────────────────────────────
-function MapCanvas({ sites, activeSiteId, onSelectSite, siteStatuses, weather, mapState, onMapStateChange }) {
+function MapCanvas({ sites, activeSiteId, onSelectSite, siteStatuses, weather, mapState, onMapStateChange, forecastDays, onForecastDaysChange }) {
   const mapInstanceRef = useRef(null);
   const ALTITUDES = [500, 1000, 1500, 2000, 3000];
 
@@ -403,14 +411,17 @@ function MapCanvas({ sites, activeSiteId, onSelectSite, siteStatuses, weather, m
         <button title="Zoom out" onClick={() => mapInstanceRef.current?.zoomOut()}>−</button>
       </div>
 
-      <Timeline weather={weather} />
+      <Timeline weather={weather} forecastDays={forecastDays} onForecastDaysChange={onForecastDaysChange} />
     </main>
   );
 }
 
 // ─── Timeline ─────────────────────────────────────────────────────────────────
-function Timeline({ weather }) {
-  const [range,   setRange]   = useState("1D");
+const RANGE_TO_DAYS = { "1D": 1, "3D": 3, "5D": 5 };
+const DAYS_TO_RANGE = { 1: "1D", 3: "3D", 5: "5D" };
+
+function Timeline({ weather, forecastDays = 1, onForecastDaysChange }) {
+  const range   = DAYS_TO_RANGE[forecastDays] ?? "1D";
   const [playing, setPlaying] = useState(false);
 
   const hours = weather ?? [];
@@ -439,7 +450,11 @@ function Timeline({ weather }) {
         </div>
         <div className="rangeButtons">
           {["1D", "3D", "5D"].map(r => (
-            <button key={r} className={range === r ? "active" : ""} onClick={() => setRange(r)}>{r}</button>
+            <button
+              key={r}
+              className={range === r ? "active" : ""}
+              onClick={() => onForecastDaysChange?.(RANGE_TO_DAYS[r])}
+            >{r}</button>
           ))}
           <button><Layers size={16} /></button>
         </div>
@@ -530,17 +545,17 @@ function BlockerList({ blockers }) {
   );
 }
 
-function RightPanel({ site, onClose }) {
+function RightPanel({ site, onClose, pilotLevel = "intermediate", forecastDays = 1 }) {
   const [tab, setTab] = useState("Overview");
 
   const { data: timeline, loading: tlLoading, error: tlError } =
-    useAsync(() => api.siteFlyabilityTimeline(site.id), [site.id]);
+    useAsync(() => api.siteFlyabilityTimeline(site.id, pilotLevel, forecastDays), [site.id, pilotLevel, forecastDays]);
 
   const { data: weather, loading: wxLoading, error: wxError } =
-    useAsync(() => api.siteWeatherHourly(site.id), [site.id]);
+    useAsync(() => api.siteWeatherHourly(site.id, forecastDays), [site.id, forecastDays]);
 
   const { data: briefingData, loading: brLoading, error: brError } =
-    useAsync(() => api.briefing(site.id), [site.id]);
+    useAsync(() => api.briefing(site.id, pilotLevel), [site.id, pilotLevel]);
 
   const decision = timeline?.[0];
   const color    = statusColor(decision?.status);
@@ -701,11 +716,28 @@ function RightPanel({ site, onClose }) {
 
 // ─── App ──────────────────────────────────────────────────────────────────────
 function App() {
-  const { data: sites, loading, error } = useAsync(api.listSites, []);
+  const { data: sites, loading, error } = useAsync(() => api.listSites(), []);
   const [activeSite, setActiveSite]     = useState(null);
   const [bestStatus, setBestStatus]     = useState(null);
   const [siteStatuses, setSiteStatuses] = useState({});
   const [mapState, setMapState]         = useMapState();
+  const [searchQuery, setSearchQuery]   = useState("");
+  const [forecastDays, setForecastDays] = useState(1);
+  const [pilotLevel, setPilotLevel]     = useState("intermediate");
+
+  const filteredSites = useMemo(() => {
+    if (!sites?.length) return [];
+    if (!searchQuery.trim()) return sites;
+    const q = searchQuery.toLowerCase();
+    return sites.filter(s =>
+      s.name.toLowerCase().includes(q) || s.region.toLowerCase().includes(q)
+    );
+  }, [sites, searchQuery]);
+
+  const { data: activeWeather } = useAsync(
+    () => activeSite ? api.siteWeatherHourly(activeSite.id, forecastDays) : Promise.resolve([]),
+    [activeSite?.id, forecastDays]
+  );
 
   // Auto-select first site
   useEffect(() => {
@@ -717,7 +749,7 @@ function App() {
     if (!sites?.length) return;
     Promise.all(
       sites.map(site =>
-        api.siteFlyabilityTimeline(site.id)
+        api.siteFlyabilityTimeline(site.id, pilotLevel)
           .then(tl => ({ id: site.id, tl }))
           .catch(() => ({ id: site.id, tl: null }))
       )
@@ -764,24 +796,28 @@ function App() {
   return (
     <div className="app">
       <Sidebar
-        sites={sites ?? []}
+        sites={filteredSites}
         activeSiteId={activeSite?.id}
         onSelectSite={setActiveSite}
         bestStatus={bestStatus}
         mapState={mapState}
         onMapStateChange={setMapState}
+        searchQuery={searchQuery}
+        onSearchChange={setSearchQuery}
       />
       <MapCanvas
         sites={sites ?? []}
         activeSiteId={activeSite?.id}
         onSelectSite={setActiveSite}
         siteStatuses={siteStatuses}
-        weather={null}
+        weather={activeWeather ?? []}
         mapState={mapState}
         onMapStateChange={setMapState}
+        forecastDays={forecastDays}
+        onForecastDaysChange={setForecastDays}
       />
       {activeSite && (
-        <RightPanel site={activeSite} onClose={() => setActiveSite(null)} />
+        <RightPanel site={activeSite} onClose={() => setActiveSite(null)} pilotLevel={pilotLevel} forecastDays={forecastDays} />
       )}
     </div>
   );

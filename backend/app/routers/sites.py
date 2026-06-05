@@ -10,10 +10,16 @@ router = APIRouter(prefix="/v1/sites", tags=["sites"])
 
 
 @router.get("")
-def list_sites(country_code: str | None = None):
+def list_sites(
+    country_code: str | None = None,
+    q: str | None = Query(None, description="Search by name or region (case-insensitive)"),
+):
     sites = SITES
     if country_code:
-        sites = [site for site in sites if site.country_code == country_code.upper()]
+        sites = [s for s in sites if s.country_code == country_code.upper()]
+    if q:
+        q_lower = q.lower()
+        sites = [s for s in sites if q_lower in s.name.lower() or q_lower in s.region.lower()]
     return sites
 
 
@@ -21,11 +27,10 @@ def list_sites(country_code: str | None = None):
 def site_recommendations(
     lat: float = Query(...),
     lon: float = Query(...),
-    radius_km: float = Query(180, gt=0, le=1000),
+    radius_km: float = Query(300, gt=0, le=2000),
     pilot_level: PilotLevel = PilotLevel.intermediate,
 ):
-    pilot = PilotProfile(pilot_level=pilot_level)
-    return recommendations(lat, lon, radius_km, pilot)
+    return recommendations(lat, lon, radius_km, PilotProfile(pilot_level=pilot_level))
 
 
 @router.get("/{site_id}")
@@ -34,4 +39,3 @@ def site_detail(site_id: UUID):
     if site is None:
         raise HTTPException(status_code=404, detail="Site not found")
     return site
-

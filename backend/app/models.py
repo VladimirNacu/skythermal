@@ -52,7 +52,13 @@ class WeatherHour(BaseModel):
     thermal_strength_ms: float | None = None
     rain_mm: float = 0
     storm_risk: int = Field(ge=0, le=100, default=0)
-    model: str = "demo-best"
+    # Altitude-specific winds from pressure levels
+    wind_1500m_kmh: float | None = None
+    wind_1500m_deg: int | None = None
+    wind_3000m_kmh: float | None = None
+    wind_3000m_deg: int | None = None
+    temperature_c: float | None = None
+    model: str = "open-meteo"
     model_run_time: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
