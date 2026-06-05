@@ -439,19 +439,43 @@ button {
   text-shadow: 0 2px 5px rgba(0,0,0,.9);
 }
 
-.siteMarker {
+.siteMarkerWrap {
   position: absolute;
   z-index: 3;
+  transform: translate(-50%, -50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+
+.siteMarker {
   width: 28px;
   height: 28px;
   display: grid;
   place-items: center;
   border: 3px solid rgba(255,255,255,.95);
   border-radius: 50% 50% 50% 0;
-  transform: translate(-50%, -50%) rotate(-45deg);
+  transform: rotate(-45deg);
   box-shadow: 0 3px 12px rgba(0,0,0,.4);
 }
 
+.windArrow {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0;
+  pointer-events: none;
+}
+
+.windArrow span {
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+  text-shadow: 0 1px 3px rgba(0,0,0,.8);
+}
+
+.siteMarker { position: relative; }
 .siteMarker svg { transform: rotate(45deg); }
 .siteMarker.green { background: #61d956; }
 .siteMarker.orange { background: #ff8b26; }

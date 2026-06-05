@@ -68,18 +68,18 @@ const hourly = [
 ];
 
 const markers = [
-  { left: "43%", top: "37%", type: "blue", label: "Montegrappa" },
-  { left: "30%", top: "24%", type: "green" },
-  { left: "36%", top: "30%", type: "green" },
-  { left: "26%", top: "52%", type: "green" },
-  { left: "44%", top: "62%", type: "green" },
-  { left: "32%", top: "72%", type: "green" },
-  { left: "61%", top: "28%", type: "green" },
-  { left: "58%", top: "20%", type: "green" },
-  { left: "22%", top: "41%", type: "green" },
-  { left: "25%", top: "79%", type: "orange" },
-  { left: "39%", top: "29%", type: "orange" },
-  { left: "64%", top: "13%", type: "orange" }
+  { left: "43%", top: "37%", type: "blue",   label: "Montegrappa", windDeg: 315, windKmh: 12 },
+  { left: "30%", top: "24%", type: "green",                         windDeg: 290, windKmh:  8 },
+  { left: "36%", top: "30%", type: "green",                         windDeg: 310, windKmh: 10 },
+  { left: "26%", top: "52%", type: "green",                         windDeg: 270, windKmh:  7 },
+  { left: "44%", top: "62%", type: "green",                         windDeg: 330, windKmh: 11 },
+  { left: "32%", top: "72%", type: "green",                         windDeg: 300, windKmh:  9 },
+  { left: "61%", top: "28%", type: "green",                         windDeg: 285, windKmh: 13 },
+  { left: "58%", top: "20%", type: "green",                         windDeg: 320, windKmh:  6 },
+  { left: "22%", top: "41%", type: "green",                         windDeg: 295, windKmh:  8 },
+  { left: "25%", top: "79%", type: "orange",                        windDeg: 215, windKmh: 22 },
+  { left: "39%", top: "29%", type: "orange",                        windDeg: 180, windKmh: 19 },
+  { left: "64%", top: "13%", type: "orange",                        windDeg: 140, windKmh: 26 }
 ];
 
 function Sidebar({ activeSite, onSelectSite }) {
@@ -163,6 +163,22 @@ function Sidebar({ activeSite, onSelectSite }) {
   );
 }
 
+function WindArrow({ deg, kmh, type }) {
+  const blowTo = (deg + 180) % 360;
+  const color = type === "orange" ? "#ff8b26" : type === "blue" ? "#2f9bff" : "#61d956";
+  return (
+    <div className="windArrow" title={`Wind from ${deg}° · ${kmh} km/h`}>
+      <svg width="22" height="22" viewBox="0 0 22 22">
+        <g transform={`rotate(${blowTo} 11 11)`}>
+          <line x1="11" y1="18" x2="11" y2="4" stroke={color} strokeWidth="2" strokeLinecap="round" />
+          <polygon points="11,2 7,9 15,9" fill={color} />
+        </g>
+      </svg>
+      <span style={{ color }}>{kmh}</span>
+    </div>
+  );
+}
+
 function MapCanvas() {
   const [altitude, setAltitude] = useState("1000 m");
   const [airspace, setAirspace] = useState(true);
@@ -213,9 +229,12 @@ function MapCanvas() {
         </div>
 
         {markers.map((m, idx) => (
-          <div className={`siteMarker ${m.type}`} style={{ left: m.left, top: m.top }} key={idx}>
-            <Plane size={15} />
-            {m.label && <span>{m.label}</span>}
+          <div className="siteMarkerWrap" style={{ left: m.left, top: m.top }} key={idx}>
+            <div className={`siteMarker ${m.type}`}>
+              <Plane size={15} />
+              {m.label && <span>{m.label}</span>}
+            </div>
+            <WindArrow deg={m.windDeg} kmh={m.windKmh} type={m.type} />
           </div>
         ))}
 
