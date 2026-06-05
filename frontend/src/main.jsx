@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   Search,
@@ -19,6 +19,7 @@ import {
   Maximize,
   Ruler,
   Play,
+  Pause,
   ChevronDown,
   MapPin,
   Plane,
@@ -30,27 +31,27 @@ import {
 } from "lucide-react";
 import "./styles.css";
 
-const favoriteSites = [
-  { name: "Montegrappa", country: "Italy", active: true },
+const INITIAL_SITES = [
+  { name: "Montegrappa", country: "Italy" },
   { name: "Bassano", country: "Italy" },
   { name: "Annecy", country: "France" },
   { name: "Chamonix Planpraz", country: "France" },
   { name: "Kobala", country: "Slovenia" }
 ];
 
-const layers = [
+const INITIAL_LAYERS = [
   { id: "surfaceWind", label: "Surface Wind", icon: Wind, active: true },
   { id: "altitudeWind", label: "Wind at Altitude", value: "1000 m", icon: Wind, active: true },
-  { id: "gusts", label: "Gusts", icon: Activity },
-  { id: "thermals", label: "Thermals", icon: Gauge },
-  { id: "cloudbase", label: "Cloudbase", icon: Cloud },
-  { id: "cape", label: "CAPE / Instability", icon: ShieldAlert },
-  { id: "rainRadar", label: "Rain Radar", icon: CloudRain },
-  { id: "lightning", label: "Lightning", icon: Zap },
-  { id: "visibility", label: "Visibility", icon: Eye },
-  { id: "tempDewpoint", label: "Temperature / Dewpoint", icon: Thermometer },
-  { id: "rotor", label: "Wave / Rotor Risk", icon: Mountain },
-  { id: "foehn", label: "Foehn Indicator", icon: Wind }
+  { id: "gusts", label: "Gusts", icon: Activity, active: false },
+  { id: "thermals", label: "Thermals", icon: Gauge, active: false },
+  { id: "cloudbase", label: "Cloudbase", icon: Cloud, active: false },
+  { id: "cape", label: "CAPE / Instability", icon: ShieldAlert, active: false },
+  { id: "rainRadar", label: "Rain Radar", icon: CloudRain, active: false },
+  { id: "lightning", label: "Lightning", icon: Zap, active: false },
+  { id: "visibility", label: "Visibility", icon: Eye, active: false },
+  { id: "tempDewpoint", label: "Temperature / Dewpoint", icon: Thermometer, active: false },
+  { id: "rotor", label: "Wave / Rotor Risk", icon: Mountain, active: false },
+  { id: "foehn", label: "Foehn Indicator", icon: Wind, active: false }
 ];
 
 const hourly = [
@@ -81,7 +82,13 @@ const markers = [
   { left: "64%", top: "13%", type: "orange" }
 ];
 
-function Sidebar() {
+function Sidebar({ activeSite, onSelectSite }) {
+  const [layers, setLayers] = useState(INITIAL_LAYERS);
+
+  function toggleLayer(id) {
+    setLayers(prev => prev.map(l => l.id === id ? { ...l, active: !l.active } : l));
+  }
+
   return (
     <aside className="sidebar">
       <div className="brand">
@@ -101,14 +108,18 @@ function Sidebar() {
       </div>
 
       <div className="favorites">
-        {favoriteSites.map((site) => (
-          <button className={`favoriteItem ${site.active ? "active" : ""}`} key={site.name}>
+        {INITIAL_SITES.map((site) => (
+          <button
+            className={`favoriteItem ${activeSite === site.name ? "active" : ""}`}
+            key={site.name}
+            onClick={() => onSelectSite(site.name)}
+          >
             <MapPin size={14} />
             <span>
               <b>{site.name}</b>
               <small>{site.country}</small>
             </span>
-            <Star size={14} className={site.active ? "starOn" : ""} />
+            <Star size={14} className={activeSite === site.name ? "starOn" : ""} />
           </button>
         ))}
       </div>
@@ -121,7 +132,11 @@ function Sidebar() {
         {layers.map((layer) => {
           const Icon = layer.icon;
           return (
-            <button className={`layerRow ${layer.active ? "active" : ""}`} key={layer.id}>
+            <button
+              className={`layerRow ${layer.active ? "active" : ""}`}
+              key={layer.id}
+              onClick={() => toggleLayer(layer.id)}
+            >
               <Icon size={15} />
               <span>{layer.label}</span>
               {layer.value && <em>{layer.value}</em>}
@@ -149,6 +164,9 @@ function Sidebar() {
 }
 
 function MapCanvas() {
+  const [altitude, setAltitude] = useState("1000 m");
+  const [airspace, setAirspace] = useState(true);
+
   return (
     <main className="mapShell">
       <div className="mapBackground">
@@ -162,16 +180,26 @@ function MapCanvas() {
         <div className="altitudeControl">
           <span>Altitude</span>
           {["500 m", "1000 m", "1500 m", "2000 m"].map((alt) => (
-            <button className={alt === "1000 m" ? "selected" : ""} key={alt}>{alt}</button>
+            <button
+              className={alt === altitude ? "selected" : ""}
+              key={alt}
+              onClick={() => setAltitude(alt)}
+            >
+              {alt}
+            </button>
           ))}
         </div>
 
-        <div className="airspaceChip">
-          Airspace <strong>ON</strong> <ChevronDown size={13} />
+        <div className="airspaceChip" onClick={() => setAirspace(v => !v)} style={{ cursor: "pointer" }}>
+          Airspace <strong>{airspace ? "ON" : "OFF"}</strong> <ChevronDown size={13} />
         </div>
 
-        <div className="airspaceZone zoneOne">FL195<br />FL95</div>
-        <div className="airspaceZone zoneTwo">CTR MILANO<br />SFC - 3500ft</div>
+        {airspace && (
+          <>
+            <div className="airspaceZone zoneOne">FL195<br />FL95</div>
+            <div className="airspaceZone zoneTwo">CTR MILANO<br />SFC - 3500ft</div>
+          </>
+        )}
 
         <div className="mapLabels">
           <span style={{ left: "10%", top: "12%" }}>Lake Geneva</span>
@@ -209,20 +237,25 @@ function MapCanvas() {
 }
 
 function Timeline() {
+  const [range, setRange] = useState("1D");
+  const [playing, setPlaying] = useState(false);
   const times = ["02:00", "05:00", "08:00", "11:00", "14:00", "17:00", "20:00", "23:00"];
+
   return (
     <section className="timelinePanel">
       <div className="timelineTop">
         <button className="dateButton">Today <small>Thu 22 May</small> <ChevronDown size={14} /></button>
-        <button className="playButton"><Play size={17} fill="currentColor" /></button>
+        <button className="playButton" onClick={() => setPlaying(v => !v)}>
+          {playing ? <Pause size={17} fill="currentColor" /> : <Play size={17} fill="currentColor" />}
+        </button>
         <div className="timeTrack">
           {times.map((t) => <span key={t}>{t}</span>)}
           <div className="currentTime"><b>11:00</b></div>
         </div>
         <div className="rangeButtons">
-          <button className="active">1D</button>
-          <button>3D</button>
-          <button>5D</button>
+          {["1D", "3D", "5D"].map(r => (
+            <button key={r} className={range === r ? "active" : ""} onClick={() => setRange(r)}>{r}</button>
+          ))}
           <button><Layers size={16} /></button>
         </div>
       </div>
@@ -248,56 +281,99 @@ function WeatherStrip({ label, values }) {
   );
 }
 
-function RightPanel() {
+const SITE_DATA = {
+  Montegrappa: { country: "Italy", flyability: 82, risk: 26, wind: 12, gust: 24, windDir: "NW", cloudbase: 1950, thermals: "Strong", thermalsMs: 3.2, window: "11:00 – 15:00", status: "GO", statusNote: "Excellent conditions" },
+  Bassano:     { country: "Italy", flyability: 74, risk: 34, wind: 14, gust: 28, windDir: "N",  cloudbase: 1700, thermals: "Moderate", thermalsMs: 2.4, window: "12:00 – 16:00", status: "GO", statusNote: "Good conditions" },
+  Annecy:      { country: "France", flyability: 58, risk: 48, wind: 18, gust: 34, windDir: "SW", cloudbase: 1400, thermals: "Weak", thermalsMs: 1.2, window: "13:00 – 15:00", status: "MAYBE", statusNote: "Check wind before launch" },
+  "Chamonix Planpraz": { country: "France", flyability: 31, risk: 72, wind: 32, gust: 48, windDir: "W", cloudbase: 900, thermals: "None", thermalsMs: 0, window: "—", status: "NO_GO", statusNote: "Wind too strong" },
+  Kobala:      { country: "Slovenia", flyability: 68, risk: 38, wind: 10, gust: 20, windDir: "NE", cloudbase: 1600, thermals: "Moderate", thermalsMs: 2.1, window: "11:00 – 14:00", status: "GO", statusNote: "Good morning window" },
+};
+
+const STATUS_COLOR = { GO: "green", MAYBE: "yellow", NO_GO: "red" };
+
+function RightPanel({ site, onClose }) {
+  const [tab, setTab] = useState("Overview");
+  const data = SITE_DATA[site] || SITE_DATA["Montegrappa"];
+  const color = STATUS_COLOR[data.status] || "green";
+
   return (
     <aside className="rightPanel">
       <div className="siteTitle">
         <div>
-          <h1><Star size={18} fill="currentColor" /> Montegrappa</h1>
-          <small>Italy</small>
+          <h1><Star size={18} fill="currentColor" /> {site}</h1>
+          <small>{data.country}</small>
         </div>
-        <button>×</button>
+        <button onClick={onClose}>×</button>
       </div>
 
       <nav className="tabs">
-        <button className="active">Overview</button>
-        <button>Forecast</button>
-        <button>Details</button>
-        <button>Notes</button>
+        {["Overview", "Forecast", "Details", "Notes"].map(t => (
+          <button key={t} className={tab === t ? "active" : ""} onClick={() => setTab(t)}>{t}</button>
+        ))}
       </nav>
 
-      <div className="metricGrid">
-        <Metric title="Flyability Score" value="82" suffix="/100" note="Excellent day!" ring="green" />
-        <Metric title="Risk Score" value="26" suffix="/100" note="Low risk" ring="yellow" />
-        <Metric title="Wind at Launch" value="12" suffix="km/h" note="NW" icon={<Wind size={22} />} />
-        <Metric title="Gusts" value="24" suffix="km/h" note="" icon={<Activity size={22} />} />
-        <Metric title="Cloudbase" value="1950" suffix="m" note="AGL" icon={<CloudSun size={23} />} />
-        <Metric title="Thermals" value="Strong" suffix="3.2 m/s" note="" icon={<Gauge size={23} />} />
-      </div>
+      {tab === "Overview" && (
+        <>
+          <div className="metricGrid">
+            <Metric title="Flyability Score" value={data.flyability} suffix="/100" note={data.flyability >= 75 ? "Excellent day!" : data.flyability >= 55 ? "Good day" : "Marginal"} ring={data.flyability >= 70 ? "green" : data.flyability >= 50 ? "yellow" : "red"} />
+            <Metric title="Risk Score" value={data.risk} suffix="/100" note={data.risk <= 30 ? "Low risk" : data.risk <= 55 ? "Moderate risk" : "High risk"} ring={data.risk <= 30 ? "yellow" : "red"} />
+            <Metric title="Wind at Launch" value={data.wind} suffix="km/h" note={data.windDir} icon={<Wind size={22} />} />
+            <Metric title="Gusts" value={data.gust} suffix="km/h" note="" icon={<Activity size={22} />} />
+            <Metric title="Cloudbase" value={data.cloudbase} suffix="m" note="AGL" icon={<CloudSun size={23} />} />
+            <Metric title="Thermals" value={data.thermals} suffix={`${data.thermalsMs} m/s`} note="" icon={<Gauge size={23} />} />
+          </div>
 
-      <div className="launchWindow">
-        <span>Best launch window</span>
-        <strong>11:00 – 15:00</strong>
-        <small>Local time</small>
-      </div>
+          <div className="launchWindow">
+            <span>Best launch window</span>
+            <strong>{data.window}</strong>
+            <small>Local time</small>
+          </div>
 
-      <button className="goBar"><Clock size={20} /> <b>GO</b> Excellent conditions <ChevronDown size={16} /></button>
+          <button className={`goBar ${color}`}>
+            <Clock size={20} /> <b>{data.status.replace("_", "-")}</b> {data.statusNote} <ChevronDown size={16} />
+          </button>
 
-      <MiniForecast />
+          <MiniForecast />
 
-      <div className="aiCard">
-        <h3><BrainCircuit size={20} /> AI Flight Briefing <em>BETA</em></h3>
-        <p>
-          High pressure and strong insolation should generate excellent thermals by late morning.
-          Light NW winds at launch with a sea-breeze component later. Cloudbase &gt;1900 m with low
-          overdevelopment risk. Great day for XC.
-        </p>
-        <div className="confidence">
-          <span>Confidence: <b>High</b></span>
-          <div><i /></div>
-          <strong>92%</strong>
+          <div className="aiCard">
+            <h3><BrainCircuit size={20} /> AI Flight Briefing <em>BETA</em></h3>
+            <p>
+              {data.status === "GO"
+                ? "High pressure and strong insolation should generate excellent thermals by late morning. Light winds at launch with stable conditions. Great day for XC."
+                : data.status === "MAYBE"
+                ? "Conditions are marginal. Wind speeds are elevated and cloudbase is lower than ideal. Monitor conditions closely before committing to launch."
+                : "Conditions are unsafe for flight today. Strong winds and low cloudbase create serious hazards. Do not launch."}
+            </p>
+            <div className="confidence">
+              <span>Confidence: <b>{data.flyability >= 70 ? "High" : data.flyability >= 50 ? "Medium" : "Low"}</b></span>
+              <div><i /></div>
+              <strong>{data.flyability >= 70 ? "92%" : data.flyability >= 50 ? "74%" : "58%"}</strong>
+            </div>
+          </div>
+        </>
+      )}
+
+      {tab === "Forecast" && (
+        <div style={{ padding: "1rem" }}>
+          <MiniForecast />
         </div>
-      </div>
+      )}
+
+      {tab === "Details" && (
+        <div style={{ padding: "1rem", color: "var(--text-muted)", fontSize: "0.85rem", lineHeight: 1.7 }}>
+          <p><b>Wind:</b> {data.wind} km/h {data.windDir} · Gusts {data.gust} km/h</p>
+          <p><b>Cloudbase:</b> {data.cloudbase} m AGL</p>
+          <p><b>Thermals:</b> {data.thermals} ({data.thermalsMs} m/s)</p>
+          <p><b>Flyability:</b> {data.flyability}/100 · Risk: {data.risk}/100</p>
+          <p><b>Best window:</b> {data.window}</p>
+        </div>
+      )}
+
+      {tab === "Notes" && (
+        <div style={{ padding: "1rem", color: "var(--text-muted)", fontSize: "0.85rem" }}>
+          <p>No notes for this site yet.</p>
+        </div>
+      )}
     </aside>
   );
 }
@@ -351,11 +427,13 @@ function ForecastRow({ label, field, highlight }) {
 }
 
 function App() {
+  const [activeSite, setActiveSite] = useState("Montegrappa");
+
   return (
     <div className="app">
-      <Sidebar />
+      <Sidebar activeSite={activeSite} onSelectSite={setActiveSite} />
       <MapCanvas />
-      <RightPanel />
+      <RightPanel site={activeSite} onClose={() => setActiveSite(null)} />
     </div>
   );
 }
