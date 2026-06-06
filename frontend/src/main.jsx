@@ -367,7 +367,7 @@ function MapLibreMap({ sites, activeSiteId, onSelectSite, siteStatuses, onMapRea
 
 // ─── Wind particle system ─────────────────────────────────────────────────────
 const WIND_OVERLAYS = new Set(["surface_wind", "altitude_wind", "gusts"]);
-const NUM_PARTICLES = 2800;
+const NUM_PARTICLES = 3500;
 
 const WIND_RAMP = [
   [0,  [38,  123, 212]],
@@ -438,21 +438,19 @@ function WindParticles({ gridData, map }) {
   const gridRef  = useRef(null);
   const pclsRef  = useRef([]);
 
-  // Keep grid ref in sync with incoming data
   useEffect(() => {
     gridRef.current = gridData?.grid?.length ? buildWindGrid(gridData.grid) : null;
   }, [gridData]);
 
-  // Create canvas imperatively inside map.getContainer() — sidesteps all
-  // z-index / stacking-context fights with the mapShell UI overlays.
   useEffect(() => {
     if (!map) return;
 
-    const container = map.getContainer(); // the .mapContainer div
-    const mapCanvas = map.getCanvas();    // MapLibre's WebGL canvas
+    const container = map.getContainer();
+    const mapCanvas = map.getCanvas();
 
-    const canvas  = document.createElement("canvas");
-    canvas.style.cssText = "position:absolute;top:0;left:0;pointer-events:none;";
+    const canvas = document.createElement("canvas");
+    // mix-blend-mode:screen makes particles glow on the dark map without covering it
+    canvas.style.cssText = "position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;mix-blend-mode:screen;opacity:0.9;";
     container.appendChild(canvas);
 
     const ctx = canvas.getContext("2d");
@@ -466,7 +464,6 @@ function WindParticles({ gridData, map }) {
       }));
     };
 
-    // Size our canvas to match the MapLibre canvas exactly
     const sync = () => {
       const W = mapCanvas.offsetWidth;
       const H = mapCanvas.offsetHeight;
@@ -480,54 +477,66 @@ function WindParticles({ gridData, map }) {
     const ro = new ResizeObserver(sync);
     ro.observe(mapCanvas);
 
+    // Smooth swirling synthetic field — used before API data arrives
+    const synWind = (x, y) => {
+      const a = Math.sin(y * 0.008) * 1.2 + Math.cos(x * 0.006) * 1.8;
+      const s = 0.7 + Math.sin((x + y) * 0.005) * 0.5;
+      return { u: Math.cos(a) * s, v: Math.sin(a) * s, speed: s * 3.6 * 8 };
+    };
+
     const frame = () => {
       frameRef.current = requestAnimationFrame(frame);
       const W = canvas.width, H = canvas.height;
       if (!W || !H) return;
 
-      ctx.fillStyle = "rgba(7,17,31,0.055)";
+      // destination-in: fade existing pixels toward transparent (keeps canvas see-through in empty areas)
+      ctx.globalCompositeOperation = "destination-in";
+      ctx.fillStyle = "rgba(0,0,0,0.93)";
       ctx.fillRect(0, 0, W, H);
 
-      const grid = gridRef.current;
-      if (!grid) return;
+      // lighter (additive): particles glow, bright where many overlap
+      ctx.globalCompositeOperation = "lighter";
+      ctx.lineWidth = 1.5;
 
-      const zoom      = map.getZoom();
-      const BASE_PX   = 0.7;
-      const zoomBoost = Math.pow(2, (zoom - 8) * 0.3);
-      const pxPerMs   = BASE_PX * zoomBoost;
-      const FLOOR_MS  = 2.0;
+      const grid    = gridRef.current;
+      const zoom    = map.getZoom();
+      const pxPerMs = 1.8 * Math.pow(2, (zoom - 8) * 0.3);
+      const FLOOR   = 2.5;
 
-      pclsRef.current.forEach(p => {
-        const ll = map.unproject([p.x, p.y]);
-        const w  = interpWind(ll.lng, ll.lat, grid);
+      for (const p of pclsRef.current) {
+        let w = null;
+        if (grid) {
+          const ll = map.unproject([p.x, p.y]);
+          w = interpWind(ll.lng, ll.lat, grid);
+        }
+        if (!w) w = synWind(p.x, p.y);
+
+        const sm  = Math.sqrt(w.u * w.u + w.v * w.v);
+        const em  = Math.max(sm, FLOOR);
+        const sc  = sm > 0.01 ? em / sm : 1;
+        const nx  = p.x + w.u * sc * pxPerMs;
+        const ny  = p.y - w.v * sc * pxPerMs;
 
         p.age++;
-        if (!w || p.age > p.maxAge || p.x < -10 || p.x > W + 10 || p.y < -10 || p.y > H + 10) {
+        if (p.age > p.maxAge || nx < -10 || nx > W + 10 || ny < -10 || ny > H + 10) {
           p.x = Math.random() * W;
           p.y = Math.random() * H;
           p.age = 0;
-          p.maxAge = 60 + Math.floor(Math.random() * 80);
-          return;
+          p.maxAge = 80 + Math.floor(Math.random() * 80);
+          continue;
         }
 
-        const speedMs = Math.sqrt(w.u * w.u + w.v * w.v);
-        const effMs   = Math.max(speedMs, FLOOR_MS);
-        const scale   = speedMs > 0.01 ? effMs / speedMs : 1;
-
-        const nx    = p.x + w.u * scale * pxPerMs;
-        const ny    = p.y - w.v * scale * pxPerMs;
-        const alpha = Math.min(1, p.age / 10) * 0.85;
-
+        const spd   = w.speed ?? sm * 3.6;
+        const alpha = Math.min(0.8, p.age / 15) * Math.max(0.3, Math.min(1, spd / 15));
+        ctx.strokeStyle = windParticleColor(spd, alpha);
         ctx.beginPath();
         ctx.moveTo(p.x, p.y);
         ctx.lineTo(nx, ny);
-        ctx.strokeStyle = windParticleColor(w.speed, alpha);
-        ctx.lineWidth   = 1.5;
         ctx.stroke();
 
         p.x = nx;
         p.y = ny;
-      });
+      }
     };
 
     frame();
@@ -539,7 +548,7 @@ function WindParticles({ gridData, map }) {
     };
   }, [map]);
 
-  return null; // canvas is managed imperatively, not via React DOM
+  return null;
 }
 
 // ─── Map Canvas (overlays + timeline) ────────────────────────────────────────
