@@ -434,64 +434,68 @@ function computeGridStep(map) {
 }
 
 function WindParticles({ gridData, map }) {
-  const canvasRef = useRef(null);
-  const frameRef  = useRef(null);
-  const gridRef   = useRef(null);
-  const pclsRef   = useRef([]);
+  const frameRef = useRef(null);
+  const gridRef  = useRef(null);
+  const pclsRef  = useRef([]);
 
+  // Keep grid ref in sync with incoming data
   useEffect(() => {
     gridRef.current = gridData?.grid?.length ? buildWindGrid(gridData.grid) : null;
   }, [gridData]);
 
+  // Create canvas imperatively inside map.getContainer() — sidesteps all
+  // z-index / stacking-context fights with the mapShell UI overlays.
   useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas || !map) return;
+    if (!map) return;
+
+    const container = map.getContainer(); // the .mapContainer div
+    const mapCanvas = map.getCanvas();    // MapLibre's WebGL canvas
+
+    const canvas  = document.createElement("canvas");
+    canvas.style.cssText = "position:absolute;top:0;left:0;pointer-events:none;";
+    container.appendChild(canvas);
+
     const ctx = canvas.getContext("2d");
 
     const scatter = (W, H) => {
       pclsRef.current = Array.from({ length: NUM_PARTICLES }, () => ({
-        x: Math.random() * W,
-        y: Math.random() * H,
-        age: Math.floor(Math.random() * 80),
+        x:      Math.random() * W,
+        y:      Math.random() * H,
+        age:    Math.floor(Math.random() * 80),
         maxAge: 60 + Math.floor(Math.random() * 80),
       }));
     };
 
-    const resize = () => {
-      const rect = canvas.getBoundingClientRect();
-      const W = Math.round(rect.width);
-      const H = Math.round(rect.height);
-      if (W > 0 && H > 0) {
+    // Size our canvas to match the MapLibre canvas exactly
+    const sync = () => {
+      const W = mapCanvas.offsetWidth;
+      const H = mapCanvas.offsetHeight;
+      if (W > 0 && H > 0 && (canvas.width !== W || canvas.height !== H)) {
         canvas.width  = W;
         canvas.height = H;
         scatter(W, H);
       }
     };
-
-    // Defer first resize so the browser has laid out the canvas
-    const rafId = requestAnimationFrame(resize);
-    const ro = new ResizeObserver(resize);
-    ro.observe(canvas);
+    sync();
+    const ro = new ResizeObserver(sync);
+    ro.observe(mapCanvas);
 
     const frame = () => {
       frameRef.current = requestAnimationFrame(frame);
       const W = canvas.width, H = canvas.height;
       if (!W || !H) return;
 
-      // Always fade — keeps canvas dark when grid is loading
       ctx.fillStyle = "rgba(7,17,31,0.055)";
       ctx.fillRect(0, 0, W, H);
 
       const grid = gridRef.current;
       if (!grid) return;
 
-      // Pixel-scale velocity: visually tuned, not physically accurate.
-      // BASE_PX = pixels/frame per m/s at zoom 8; boosted at higher zoom.
       const zoom      = map.getZoom();
       const BASE_PX   = 0.7;
       const zoomBoost = Math.pow(2, (zoom - 8) * 0.3);
       const pxPerMs   = BASE_PX * zoomBoost;
-      const FLOOR_MS  = 2.0; // minimum visual speed so calm days still show flow
+      const FLOOR_MS  = 2.0;
 
       pclsRef.current.forEach(p => {
         const ll = map.unproject([p.x, p.y]);
@@ -527,19 +531,15 @@ function WindParticles({ gridData, map }) {
     };
 
     frame();
+
     return () => {
       cancelAnimationFrame(frameRef.current);
-      cancelAnimationFrame(rafId);
       ro.disconnect();
+      if (container.contains(canvas)) container.removeChild(canvas);
     };
   }, [map]);
 
-  return (
-    <canvas
-      ref={canvasRef}
-      style={{ display: "block", position: "absolute", inset: "0 0 182px", pointerEvents: "none", zIndex: 1 }}
-    />
-  );
+  return null; // canvas is managed imperatively, not via React DOM
 }
 
 // ─── Map Canvas (overlays + timeline) ────────────────────────────────────────
