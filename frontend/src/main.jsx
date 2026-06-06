@@ -174,13 +174,13 @@ function Sidebar({ sites, activeSiteId, onSelectSite, bestStatus, mapState, onMa
     <aside className="sidebar">
       <div className="brand">
         <div className="brandMark">▰</div>
-        <span>SkyThermal</span>
+        <span>SkyThermal <small style={{ fontSize: "0.55em", opacity: 0.6, fontWeight: 500 }}>RO</small></span>
       </div>
 
       <div className="searchBox">
         <Search size={16} />
         <input
-          placeholder="Search location or site…"
+          placeholder="Search Carpathian launch or region…"
           value={searchQuery}
           onChange={e => onSearchChange(e.target.value)}
         />
@@ -188,7 +188,7 @@ function Sidebar({ sites, activeSiteId, onSelectSite, bestStatus, mapState, onMa
       </div>
 
       <div className="sideHeader">
-        <span>Launch Sites</span>
+        <span>Favourite sites</span>
         <button className="iconButton small"><Plus size={15} /></button>
       </div>
 
@@ -298,7 +298,7 @@ function MapLibreMap({ sites, activeSiteId, onSelectSite, siteStatuses, onMapRea
     const map = new maplibregl.Map({
       container: containerRef.current,
       style: MAP_STYLE,
-      center: [8.5, 61.2],
+      center: [25.0, 45.8],   // Romania / Carpathians
       zoom: 7,
       maxZoom: 15,
       minZoom: 2,
@@ -367,31 +367,6 @@ function MapLibreMap({ sites, activeSiteId, onSelectSite, siteStatuses, onMapRea
 
 // ─── Wind particle system ─────────────────────────────────────────────────────
 const WIND_OVERLAYS = new Set(["surface_wind", "altitude_wind", "gusts"]);
-const NUM_PARTICLES = 3500;
-
-const WIND_RAMP = [
-  [0,  [38,  123, 212]],
-  [10, [56,  152, 220]],
-  [20, [64,  190, 196]],
-  [30, [55,  180, 100]],
-  [40, [220, 200,  50]],
-  [50, [230, 120,  40]],
-  [60, [220,  60,  70]],
-  [80, [115,  43, 206]],
-];
-
-function windParticleColor(kmh, alpha) {
-  let i = 0;
-  while (i < WIND_RAMP.length - 1 && WIND_RAMP[i + 1][0] <= kmh) i++;
-  if (i >= WIND_RAMP.length - 1) {
-    const [r, g, b] = WIND_RAMP[WIND_RAMP.length - 1][1];
-    return `rgba(${r},${g},${b},${alpha})`;
-  }
-  const t  = (kmh - WIND_RAMP[i][0]) / (WIND_RAMP[i + 1][0] - WIND_RAMP[i][0]);
-  const c0 = WIND_RAMP[i][1], c1 = WIND_RAMP[i + 1][1];
-  const l  = (a, b) => Math.round(a + t * (b - a));
-  return `rgba(${l(c0[0],c1[0])},${l(c0[1],c1[1])},${l(c0[2],c1[2])},${alpha})`;
-}
 
 function buildWindGrid(pts) {
   if (!pts?.length) return null;
@@ -433,120 +408,340 @@ function computeGridStep(map) {
   return Math.max(0.5, Math.min(2.5, Math.round(step * 4) / 4));
 }
 
-function WindParticles({ gridData, map }) {
-  const frameRef = useRef(null);
-  const gridRef  = useRef(null);
-  const pclsRef  = useRef([]);
+// ─── Phase 3: WebGL2 wind particle layer ─────────────────────────────────────
+// Architecture: CPU simulation (25k particles via LUT) + GPU FBO trail accumulation.
+// LUT = 128×128 screen-space wind texture rebuilt on each moveend/new data fetch.
+// Trail: ping-pong RGBA8 FBOs; fade → additive draw → blit to MapLibre framebuffer.
 
-  useEffect(() => {
-    gridRef.current = gridData?.grid?.length ? buildWindGrid(gridData.grid) : null;
-  }, [gridData]);
+function createWindGLLayer() {
+  const N  = 25000;      // particle count
+  const LW = 128, LH = 128;  // wind LUT dimensions
+
+  // ── GLSL shaders ──────────────────────────────────────────────────────────
+  const VS_QUAD = `#version 300 es
+in vec2 a_pos;out vec2 v_uv;
+void main(){gl_Position=vec4(a_pos,0.,1.);v_uv=a_pos*.5+.5;}`;
+
+  const FS_FADE = `#version 300 es
+precision mediump float;
+in vec2 v_uv;uniform sampler2D u_tex;out vec4 c;
+void main(){c=texture(u_tex,v_uv)*.93;}`;
+
+  const FS_BLIT = `#version 300 es
+precision mediump float;
+in vec2 v_uv;uniform sampler2D u_tex;out vec4 c;
+void main(){c=texture(u_tex,v_uv);}`;
+
+  const VS_PARTICLE = `#version 300 es
+precision highp float;
+in vec4 a_p;out float v_spd;out float v_age;
+void main(){
+  v_spd=a_p.z;v_age=a_p.w;
+  gl_Position=vec4(a_p.x*2.-1.,1.-a_p.y*2.,0.,1.);
+  gl_PointSize=3.;
+}`;
+
+  const FS_PARTICLE = `#version 300 es
+precision mediump float;
+in float v_spd;in float v_age;out vec4 c;
+vec3 wc(float k){
+  if(k<10.)return mix(vec3(.15,.48,.83),vec3(.22,.60,.86),k/10.);
+  if(k<20.)return mix(vec3(.22,.60,.86),vec3(.25,.75,.77),(k-10.)/10.);
+  if(k<30.)return mix(vec3(.25,.75,.77),vec3(.22,.71,.39),(k-20.)/10.);
+  if(k<40.)return mix(vec3(.22,.71,.39),vec3(.86,.78,.20),(k-30.)/10.);
+  if(k<50.)return mix(vec3(.86,.78,.20),vec3(.90,.47,.16),(k-40.)/10.);
+  if(k<60.)return mix(vec3(.90,.47,.16),vec3(.86,.24,.28),(k-50.)/10.);
+  return mix(vec3(.86,.24,.28),vec3(.45,.17,.81),clamp((k-60.)/20.,0.,1.));
+}
+void main(){
+  vec2 cxy=2.*gl_PointCoord-1.;
+  if(dot(cxy,cxy)>1.)discard;
+  float a=min(.9,v_age/15.)*max(.15,min(1.,v_spd/20.))*(1.-length(cxy));
+  vec3 col=wc(v_spd);
+  c=vec4(col*a,a);
+}`;
+
+  // ── GL resources ──────────────────────────────────────────────────────────
+  let _gl, _map;
+  let _quadBuf, _particleBuf;
+  let _progFade, _progBlit, _progParticle;
+  let _trailA, _trailB, _fboA, _fboB;
+  let _trailW = 0, _trailH = 0;
+
+  // ── CPU particle state ────────────────────────────────────────────────────
+  const _pdata = new Float32Array(N * 4);   // x, y, speed_kmh, age_ratio per particle
+  const _px    = new Float32Array(N);
+  const _py    = new Float32Array(N);
+  const _pa    = new Float32Array(N);       // age
+  const _pma   = new Float32Array(N);       // maxAge
+  const _ps    = new Float32Array(N);       // speed km/h
+
+  for (let i = 0; i < N; i++) {
+    _px[i] = Math.random(); _py[i] = Math.random();
+    _pa[i] = Math.floor(Math.random() * 80);
+    _pma[i] = 60 + Math.floor(Math.random() * 80);
+    _ps[i] = 15;
+  }
+
+  // ── Wind LUT (screen-space, rebuilt on moveend + new data) ────────────────
+  let _lut_u = null, _lut_v = null, _lut_s = null, _lut_ok = null;
+  let _lastGrid = null;
+  let _pendingUpdate = null;  // { gridData, map } queued before onAdd
+
+  // ── Helpers ───────────────────────────────────────────────────────────────
+  function _mkShader(gl, type, src) {
+    const s = gl.createShader(type);
+    gl.shaderSource(s, src); gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+      console.error("[WindGL] shader:", gl.getShaderInfoLog(s));
+      gl.deleteShader(s); return null;
+    }
+    return s;
+  }
+
+  function _mkProg(gl, vs, fs) {
+    const p = gl.createProgram();
+    const v = _mkShader(gl, gl.VERTEX_SHADER, vs);
+    const f = _mkShader(gl, gl.FRAGMENT_SHADER, fs);
+    if (!v || !f) return null;
+    gl.attachShader(p, v); gl.attachShader(p, f); gl.linkProgram(p);
+    gl.deleteShader(v); gl.deleteShader(f);
+    if (!gl.getProgramParameter(p, gl.LINK_STATUS)) {
+      console.error("[WindGL] link:", gl.getProgramInfoLog(p)); return null;
+    }
+    return p;
+  }
+
+  function _mkTex(gl, w, h, data = null) {
+    const t = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, t);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, data);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.bindTexture(gl.TEXTURE_2D, null);
+    return t;
+  }
+
+  function _mkFBO(gl, tex) {
+    const f = gl.createFramebuffer();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, f);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    return f;
+  }
+
+  function _ensureTrail(gl, w, h) {
+    if (_trailW === w && _trailH === h) return;
+    if (_trailA) gl.deleteTexture(_trailA);
+    if (_trailB) gl.deleteTexture(_trailB);
+    if (_fboA)   gl.deleteFramebuffer(_fboA);
+    if (_fboB)   gl.deleteFramebuffer(_fboB);
+    _trailA = _mkTex(gl, w, h); _trailB = _mkTex(gl, w, h);
+    _fboA = _mkFBO(gl, _trailA); _fboB = _mkFBO(gl, _trailB);
+    _trailW = w; _trailH = h;
+  }
+
+  function _buildLUT(map) {
+    if (!_lastGrid) { _lut_ok = null; return; }
+    const mc = map.getCanvas();
+    const W  = mc.offsetWidth, H = mc.offsetHeight;
+    if (!W || !H) return;
+    _lut_u = new Float32Array(LW * LH);
+    _lut_v = new Float32Array(LW * LH);
+    _lut_s = new Float32Array(LW * LH);
+    _lut_ok = new Uint8Array(LW * LH);
+    for (let y = 0; y < LH; y++) {
+      for (let x = 0; x < LW; x++) {
+        const ll = map.unproject([x * W / LW, y * H / LH]);
+        const w  = interpWind(ll.lng, ll.lat, _lastGrid);
+        const i  = y * LW + x;
+        if (w) { _lut_u[i] = w.u; _lut_v[i] = w.v; _lut_s[i] = w.speed; _lut_ok[i] = 1; }
+      }
+    }
+  }
+
+  function _sampleLUT(xn, yn) {
+    if (!_lut_ok) return null;
+    const xi = Math.min(LW - 1, Math.floor(xn * LW));
+    const yi = Math.min(LH - 1, Math.floor(yn * LH));
+    const i  = yi * LW + xi;
+    if (!_lut_ok[i]) return null;
+    return { u: _lut_u[i], v: _lut_v[i], s: _lut_s[i] };
+  }
+
+  function _synWind(x, y) {
+    const a = Math.sin(y * 25.13) * 1.2 + Math.cos(x * 18.85) * 1.8;
+    const m = 0.7 + Math.sin((x + y) * 15.71) * 0.5;
+    return { u: Math.cos(a) * m * 5, v: Math.sin(a) * m * 5, s: m * 18 };
+  }
+
+  function _cpuUpdate(zoom, W, H) {
+    const pxF = 1.8 * Math.pow(2, (zoom - 8) * 0.3);
+    const ux  = pxF / W, uy = pxF / H;
+    let j = 0;
+    for (let i = 0; i < N; i++) {
+      const x = _px[i], y = _py[i];
+      const w = _sampleLUT(x, y) ?? _synWind(x, y);
+      const nx = x + w.u * ux;
+      const ny = y - w.v * uy;
+      _pa[i]++;
+      if (_pa[i] > _pma[i] || nx < 0 || nx > 1 || ny < 0 || ny > 1) {
+        _px[i] = Math.random(); _py[i] = Math.random();
+        _pa[i] = 0; _pma[i] = 60 + Math.floor(Math.random() * 80); _ps[i] = 15;
+      } else {
+        _px[i] = nx; _py[i] = ny; _ps[i] = w.s;
+      }
+      _pdata[j++] = _px[i]; _pdata[j++] = _py[i];
+      _pdata[j++] = _ps[i]; _pdata[j++] = Math.min(1, _pa[i] / 15);
+    }
+  }
+
+  function _blitQuad(gl, prog, tex) {
+    gl.useProgram(prog);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.uniform1i(gl.getUniformLocation(prog, "u_tex"), 0);
+    const loc = gl.getAttribLocation(prog, "a_pos");
+    gl.bindBuffer(gl.ARRAY_BUFFER, _quadBuf);
+    gl.enableVertexAttribArray(loc);
+    gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    gl.disableVertexAttribArray(loc);
+  }
+
+  // ── MapLibre custom layer API ──────────────────────────────────────────────
+  return {
+    id: "wind-gl",
+    type: "custom",
+    renderingMode: "2d",
+
+    onAdd(m, g) {
+      _map = m; _gl = g;
+      _progFade     = _mkProg(g, VS_QUAD,     FS_FADE);
+      _progBlit     = _mkProg(g, VS_QUAD,     FS_BLIT);
+      _progParticle = _mkProg(g, VS_PARTICLE, FS_PARTICLE);
+      if (!_progFade || !_progBlit || !_progParticle) return;
+
+      _quadBuf = g.createBuffer();
+      g.bindBuffer(g.ARRAY_BUFFER, _quadBuf);
+      g.bufferData(g.ARRAY_BUFFER, new Float32Array([-1,-1, 1,-1, -1,1, 1,1]), g.STATIC_DRAW);
+
+      _particleBuf = g.createBuffer();
+      g.bindBuffer(g.ARRAY_BUFFER, null);
+
+      if (_pendingUpdate) {
+        this.updateWind(_pendingUpdate.gridData, _pendingUpdate.map);
+        _pendingUpdate = null;
+      }
+    },
+
+    render(g, _matrix) {
+      if (!_progFade || !_particleBuf) return;
+      const mc = _map.getCanvas();
+      const W  = mc.width, H = mc.height;
+      if (!W || !H) return;
+      _ensureTrail(g, W, H);
+
+      const prevFBO = g.getParameter(g.FRAMEBUFFER_BINDING);
+      g.disable(g.DEPTH_TEST);
+      g.disable(g.STENCIL_TEST);
+
+      // 1. CPU update
+      _cpuUpdate(_map.getZoom(), W, H);
+
+      // 2. Upload particle data to GPU
+      g.bindBuffer(g.ARRAY_BUFFER, _particleBuf);
+      g.bufferData(g.ARRAY_BUFFER, _pdata, g.DYNAMIC_DRAW);
+      g.bindBuffer(g.ARRAY_BUFFER, null);
+
+      // 3. Fade trail (trailA → trailB × 0.93)
+      g.bindFramebuffer(g.FRAMEBUFFER, _fboB);
+      g.viewport(0, 0, W, H);
+      g.disable(g.BLEND);
+      _blitQuad(g, _progFade, _trailA);
+
+      // 4. Draw new particles to trailB (additive)
+      g.enable(g.BLEND);
+      g.blendFunc(g.ONE, g.ONE);
+      g.useProgram(_progParticle);
+      const pLoc = g.getAttribLocation(_progParticle, "a_p");
+      g.bindBuffer(g.ARRAY_BUFFER, _particleBuf);
+      g.enableVertexAttribArray(pLoc);
+      g.vertexAttribPointer(pLoc, 4, g.FLOAT, false, 0, 0);
+      g.drawArrays(g.POINTS, 0, N);
+      g.disableVertexAttribArray(pLoc);
+      g.bindBuffer(g.ARRAY_BUFFER, null);
+      g.disable(g.BLEND);
+
+      // 5. Blit trailB to screen (additive glow on map)
+      g.bindFramebuffer(g.FRAMEBUFFER, prevFBO);
+      g.viewport(0, 0, W, H);
+      g.enable(g.BLEND);
+      g.blendFunc(g.ONE, g.ONE);
+      _blitQuad(g, _progBlit, _trailB);
+      g.disable(g.BLEND);
+
+      // 6. Restore MapLibre state
+      g.enable(g.DEPTH_TEST);
+
+      // 7. Swap trail ping-pong
+      [_trailA, _trailB] = [_trailB, _trailA];
+      [_fboA,   _fboB]   = [_fboB,   _fboA];
+
+      _map.triggerRepaint();
+    },
+
+    onRemove(_m, g) {
+      [_trailA, _trailB].forEach(t => t && g.deleteTexture(t));
+      [_fboA,   _fboB].forEach(f => f && g.deleteFramebuffer(f));
+      if (_quadBuf)     g.deleteBuffer(_quadBuf);
+      if (_particleBuf) g.deleteBuffer(_particleBuf);
+      [_progFade, _progBlit, _progParticle].forEach(p => p && g.deleteProgram(p));
+    },
+
+    // Called when new wind grid data arrives or map view changes
+    updateWind(gridData, map) {
+      if (!_gl) { _pendingUpdate = { gridData, map }; return; }
+      _lastGrid = gridData?.grid?.length ? buildWindGrid(gridData.grid) : null;
+      if (map) _buildLUT(map);
+    },
+
+    // Rebuild screen-space LUT after map pan/zoom (same data, new projection)
+    rebuildLUT(map) {
+      if (_gl) _buildLUT(map);
+    },
+  };
+}
+
+function WindParticlesGL({ gridData, map }) {
+  const layerRef = useRef(null);
 
   useEffect(() => {
     if (!map) return;
-
-    const container = map.getContainer();
-    const mapCanvas = map.getCanvas();
-
-    const canvas = document.createElement("canvas");
-    // mix-blend-mode:screen makes particles glow on the dark map without covering it
-    canvas.style.cssText = "position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;mix-blend-mode:screen;opacity:0.9;";
-    container.appendChild(canvas);
-
-    const ctx = canvas.getContext("2d");
-
-    const scatter = (W, H) => {
-      pclsRef.current = Array.from({ length: NUM_PARTICLES }, () => ({
-        x:      Math.random() * W,
-        y:      Math.random() * H,
-        age:    Math.floor(Math.random() * 80),
-        maxAge: 60 + Math.floor(Math.random() * 80),
-      }));
-    };
-
-    const sync = () => {
-      const W = mapCanvas.offsetWidth;
-      const H = mapCanvas.offsetHeight;
-      if (W > 0 && H > 0 && (canvas.width !== W || canvas.height !== H)) {
-        canvas.width  = W;
-        canvas.height = H;
-        scatter(W, H);
-      }
-    };
-    sync();
-    const ro = new ResizeObserver(sync);
-    ro.observe(mapCanvas);
-
-    // Smooth swirling synthetic field — used before API data arrives
-    const synWind = (x, y) => {
-      const a = Math.sin(y * 0.008) * 1.2 + Math.cos(x * 0.006) * 1.8;
-      const s = 0.7 + Math.sin((x + y) * 0.005) * 0.5;
-      return { u: Math.cos(a) * s, v: Math.sin(a) * s, speed: s * 3.6 * 8 };
-    };
-
-    const frame = () => {
-      frameRef.current = requestAnimationFrame(frame);
-      const W = canvas.width, H = canvas.height;
-      if (!W || !H) return;
-
-      // destination-in: fade existing pixels toward transparent (keeps canvas see-through in empty areas)
-      ctx.globalCompositeOperation = "destination-in";
-      ctx.fillStyle = "rgba(0,0,0,0.93)";
-      ctx.fillRect(0, 0, W, H);
-
-      // lighter (additive): particles glow, bright where many overlap
-      ctx.globalCompositeOperation = "lighter";
-      ctx.lineWidth = 1.5;
-
-      const grid    = gridRef.current;
-      const zoom    = map.getZoom();
-      const pxPerMs = 1.8 * Math.pow(2, (zoom - 8) * 0.3);
-      const FLOOR   = 2.5;
-
-      for (const p of pclsRef.current) {
-        let w = null;
-        if (grid) {
-          const ll = map.unproject([p.x, p.y]);
-          w = interpWind(ll.lng, ll.lat, grid);
-        }
-        if (!w) w = synWind(p.x, p.y);
-
-        const sm  = Math.sqrt(w.u * w.u + w.v * w.v);
-        const em  = Math.max(sm, FLOOR);
-        const sc  = sm > 0.01 ? em / sm : 1;
-        const nx  = p.x + w.u * sc * pxPerMs;
-        const ny  = p.y - w.v * sc * pxPerMs;
-
-        p.age++;
-        if (p.age > p.maxAge || nx < -10 || nx > W + 10 || ny < -10 || ny > H + 10) {
-          p.x = Math.random() * W;
-          p.y = Math.random() * H;
-          p.age = 0;
-          p.maxAge = 80 + Math.floor(Math.random() * 80);
-          continue;
-        }
-
-        const spd   = w.speed ?? sm * 3.6;
-        const alpha = Math.min(0.8, p.age / 15) * Math.max(0.3, Math.min(1, spd / 15));
-        ctx.strokeStyle = windParticleColor(spd, alpha);
-        ctx.beginPath();
-        ctx.moveTo(p.x, p.y);
-        ctx.lineTo(nx, ny);
-        ctx.stroke();
-
-        p.x = nx;
-        p.y = ny;
-      }
-    };
-
-    frame();
-
+    const layer = createWindGLLayer();
+    layerRef.current = layer;
+    try {
+      map.addLayer(layer);
+    } catch (e) {
+      console.error("[WindGL] addLayer failed:", e);
+      return;
+    }
+    const onView = () => layerRef.current?.rebuildLUT(map);
+    map.on("moveend", onView);
+    map.on("zoomend", onView);
     return () => {
-      cancelAnimationFrame(frameRef.current);
-      ro.disconnect();
-      if (container.contains(canvas)) container.removeChild(canvas);
+      map.off("moveend", onView);
+      map.off("zoomend", onView);
+      layerRef.current = null;
+      try { if (map.getLayer("wind-gl")) map.removeLayer("wind-gl"); } catch (_) {}
     };
   }, [map]);
+
+  useEffect(() => {
+    if (layerRef.current && map) layerRef.current.updateWind(gridData, map);
+  }, [gridData, map]);
 
   return null;
 }
@@ -556,7 +751,8 @@ function MapCanvas({ sites, activeSiteId, onSelectSite, siteStatuses, weather, m
   const mapInstanceRef = useRef(null);
   const [mapInstance, setMapInstance] = useState(null);
   const [windGrid,    setWindGrid]    = useState(null);
-  const ALTITUDES = [500, 1000, 1500, 2000, 3000];
+  const ALTITUDES = [0, 500, 1000, 1500, 2000, 3000];
+  const ALT_LABEL = { 0: "Surface", 500: "500 m", 1000: "1000 m", 1500: "1500 m", 2000: "2000 m", 3000: "3000 m" };
   const isWind = WIND_OVERLAYS.has(mapState.overlay);
 
   useEffect(() => {
@@ -609,7 +805,7 @@ function MapCanvas({ sites, activeSiteId, onSelectSite, siteStatuses, weather, m
         }}
       />
       {isWind && mapInstance && (
-        <WindParticles gridData={windGrid} map={mapInstance} />
+        <WindParticlesGL gridData={windGrid} map={mapInstance} />
       )}
 
       <div className="topLegend">
@@ -627,7 +823,7 @@ function MapCanvas({ sites, activeSiteId, onSelectSite, siteStatuses, weather, m
             className={mapState.altitudeM === alt ? "selected" : ""}
             onClick={() => onMapStateChange({ altitudeM: alt })}
           >
-            {alt} m
+            {ALT_LABEL[alt]}
           </button>
         ))}
       </div>
@@ -637,7 +833,7 @@ function MapCanvas({ sites, activeSiteId, onSelectSite, siteStatuses, weather, m
         onClick={() => onMapStateChange({ airspaceEnabled: !mapState.airspaceEnabled })}
         style={{ cursor: "pointer" }}
       >
-        Airspace <strong>{mapState.airspaceEnabled ? "ON" : "OFF"}</strong> <ChevronDown size={13} />
+        ROMATSA / Airspace <strong>{mapState.airspaceEnabled ? "ON" : "OFF"}</strong> <ChevronDown size={13} />
       </div>
 
       {/* Airspace zones: will be MapLibre GeoJSON layers once real data is wired */}

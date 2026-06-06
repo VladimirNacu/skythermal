@@ -20,5 +20,5 @@ def site_flyability_timeline(
     site = get_site(site_id)
     if site is None:
         raise HTTPException(status_code=404, detail="Site not found")
-    weather = fetch_site_weather(site.lat, site.lon, site.altitude_m, days=days) or demo_weather(site_id)
+    weather = fetch_site_weather(site.lat, site.lon, site.altitude_m, days=days, country_code=site.country_code) or demo_weather(site_id)
     return score_timeline(site, weather, PilotProfile(pilot_level=pilot_level))

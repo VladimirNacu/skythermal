@@ -15,7 +15,7 @@ def site_hourly_weather(site_id: UUID, days: int = Query(1, ge=1, le=5)):
     site = get_site(site_id)
     if site is None:
         raise HTTPException(status_code=404, detail="Site not found")
-    weather = fetch_site_weather(site.lat, site.lon, site.altitude_m, days=days)
+    weather = fetch_site_weather(site.lat, site.lon, site.altitude_m, days=days, country_code=site.country_code)
     return weather or demo_weather(site_id)
 
 

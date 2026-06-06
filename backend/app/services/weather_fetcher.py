@@ -27,8 +27,14 @@ HOURLY_VARS = ",".join([
     "precipitation",
     "cape",
     "visibility",
+    "windspeed_925hPa",   # ≈ 500–800 m
+    "winddirection_925hPa",
     "windspeed_850hPa",   # ≈ 1500 m
     "winddirection_850hPa",
+    "windspeed_800hPa",   # ≈ 2000 m
+    "winddirection_800hPa",
+    "windspeed_750hPa",   # ≈ 2500 m
+    "winddirection_750hPa",
     "windspeed_700hPa",   # ≈ 3000 m
     "winddirection_700hPa",
 ])
@@ -150,9 +156,26 @@ def _parse(data: dict, site_altitude_m: int, days: int) -> list[WeatherHour]:
 
 # ─── Public API ───────────────────────────────────────────────────────────────
 
-def fetch_site_weather(lat: float, lon: float, site_altitude_m: int, days: int = 1) -> list[WeatherHour]:
-    """Return hourly forecast for `days` days (1–5). Cached 30 min in Redis."""
+def fetch_site_weather(
+    lat: float, lon: float, site_altitude_m: int, days: int = 1, country_code: str = ""
+) -> list[WeatherHour]:
+    """
+    Return hourly forecast for `days` days (1–5).
+    Norwegian sites (country_code='NO') use MET Norway first, then fall back to Open-Meteo.
+    Results cached 30 min in Redis.
+    """
     days = max(1, min(5, days))
+
+    # Phase 2 — MET Norway for Norwegian sites (more accurate for NO terrain)
+    if country_code == "NO":
+        try:
+            from backend.app.services.met_norway import fetch_met_norway  # noqa: PLC0415
+            result = fetch_met_norway(lat, lon, site_altitude_m, days)
+            if result:
+                return result
+        except Exception as exc:
+            logger.warning("MET Norway unavailable, falling back to Open-Meteo: %s", exc)
+
     cache_key = f"wx:{lat:.3f}:{lon:.3f}:{days}"
 
     cached = _cache_get(cache_key)
@@ -211,10 +234,16 @@ def fetch_wind_grid(
     if not points:
         return []
 
-    if altitude_m >= 2500:
-        spd_var, dir_var = "windspeed_700hPa",  "winddirection_700hPa"
-    elif altitude_m >= 800:
-        spd_var, dir_var = "windspeed_850hPa",  "winddirection_850hPa"
+    if altitude_m >= 2800:
+        spd_var, dir_var = "windspeed_700hPa",  "winddirection_700hPa"   # ≈ 3000 m
+    elif altitude_m >= 2200:
+        spd_var, dir_var = "windspeed_750hPa",  "winddirection_750hPa"   # ≈ 2500 m
+    elif altitude_m >= 1600:
+        spd_var, dir_var = "windspeed_800hPa",  "winddirection_800hPa"   # ≈ 2000 m
+    elif altitude_m >= 1000:
+        spd_var, dir_var = "windspeed_850hPa",  "winddirection_850hPa"   # ≈ 1500 m
+    elif altitude_m >= 400:
+        spd_var, dir_var = "windspeed_925hPa",  "winddirection_925hPa"   # ≈ 750 m
     else:
         spd_var, dir_var = "windspeed_10m",      "winddirection_10m"
 
