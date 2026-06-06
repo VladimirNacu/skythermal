@@ -485,10 +485,13 @@ function WindParticles({ gridData, map }) {
       const grid = gridRef.current;
       if (!grid) return;
 
-      const zoom   = map.getZoom();
-      const center = map.getCenter();
-      const mpp    = 156543.03392 * Math.cos(center.lat * Math.PI / 180) / Math.pow(2, zoom);
-      const DT     = 1.5;
+      // Pixel-scale velocity: visually tuned, not physically accurate.
+      // BASE_PX = pixels/frame per m/s at zoom 8; boosted at higher zoom.
+      const zoom      = map.getZoom();
+      const BASE_PX   = 0.7;
+      const zoomBoost = Math.pow(2, (zoom - 8) * 0.3);
+      const pxPerMs   = BASE_PX * zoomBoost;
+      const FLOOR_MS  = 2.0; // minimum visual speed so calm days still show flow
 
       pclsRef.current.forEach(p => {
         const ll = map.unproject([p.x, p.y]);
@@ -503,15 +506,19 @@ function WindParticles({ gridData, map }) {
           return;
         }
 
-        const nx    = p.x + (w.u * DT) / mpp;
-        const ny    = p.y - (w.v * DT) / mpp;
-        const alpha = Math.min(1, p.age / 12) * 0.80;
+        const speedMs = Math.sqrt(w.u * w.u + w.v * w.v);
+        const effMs   = Math.max(speedMs, FLOOR_MS);
+        const scale   = speedMs > 0.01 ? effMs / speedMs : 1;
+
+        const nx    = p.x + w.u * scale * pxPerMs;
+        const ny    = p.y - w.v * scale * pxPerMs;
+        const alpha = Math.min(1, p.age / 10) * 0.85;
 
         ctx.beginPath();
         ctx.moveTo(p.x, p.y);
         ctx.lineTo(nx, ny);
         ctx.strokeStyle = windParticleColor(w.speed, alpha);
-        ctx.lineWidth   = 1.4;
+        ctx.lineWidth   = 1.5;
         ctx.stroke();
 
         p.x = nx;
@@ -530,7 +537,7 @@ function WindParticles({ gridData, map }) {
   return (
     <canvas
       ref={canvasRef}
-      style={{ display: "block", position: "absolute", inset: "0 0 182px", pointerEvents: "none", zIndex: 3 }}
+      style={{ display: "block", position: "absolute", inset: "0 0 182px", pointerEvents: "none", zIndex: 1 }}
     />
   );
 }
