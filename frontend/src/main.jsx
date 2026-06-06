@@ -440,8 +440,7 @@ function WindParticles({ gridData, map }) {
   const pclsRef   = useRef([]);
 
   useEffect(() => {
-    if (!gridData?.grid?.length) { gridRef.current = null; return; }
-    gridRef.current = buildWindGrid(gridData.grid);
+    gridRef.current = gridData?.grid?.length ? buildWindGrid(gridData.grid) : null;
   }, [gridData]);
 
   useEffect(() => {
@@ -459,27 +458,37 @@ function WindParticles({ gridData, map }) {
     };
 
     const resize = () => {
-      canvas.width  = canvas.offsetWidth;
-      canvas.height = canvas.offsetHeight;
-      scatter(canvas.width, canvas.height);
+      const rect = canvas.getBoundingClientRect();
+      const W = Math.round(rect.width);
+      const H = Math.round(rect.height);
+      if (W > 0 && H > 0) {
+        canvas.width  = W;
+        canvas.height = H;
+        scatter(W, H);
+      }
     };
 
-    resize();
-    window.addEventListener("resize", resize);
+    // Defer first resize so the browser has laid out the canvas
+    const rafId = requestAnimationFrame(resize);
+    const ro = new ResizeObserver(resize);
+    ro.observe(canvas);
 
     const frame = () => {
       frameRef.current = requestAnimationFrame(frame);
-      const grid = gridRef.current;
       const W = canvas.width, H = canvas.height;
-      if (!grid || !W || !H) return;
+      if (!W || !H) return;
+
+      // Always fade — keeps canvas dark when grid is loading
+      ctx.fillStyle = "rgba(7,17,31,0.055)";
+      ctx.fillRect(0, 0, W, H);
+
+      const grid = gridRef.current;
+      if (!grid) return;
 
       const zoom   = map.getZoom();
       const center = map.getCenter();
       const mpp    = 156543.03392 * Math.cos(center.lat * Math.PI / 180) / Math.pow(2, zoom);
       const DT     = 1.5;
-
-      ctx.fillStyle = "rgba(7,17,31,0.055)";
-      ctx.fillRect(0, 0, W, H);
 
       pclsRef.current.forEach(p => {
         const ll = map.unproject([p.x, p.y]);
@@ -513,14 +522,15 @@ function WindParticles({ gridData, map }) {
     frame();
     return () => {
       cancelAnimationFrame(frameRef.current);
-      window.removeEventListener("resize", resize);
+      cancelAnimationFrame(rafId);
+      ro.disconnect();
     };
   }, [map]);
 
   return (
     <canvas
       ref={canvasRef}
-      style={{ position: "absolute", inset: "0 0 182px", pointerEvents: "none", zIndex: 2 }}
+      style={{ display: "block", position: "absolute", inset: "0 0 182px", pointerEvents: "none", zIndex: 3 }}
     />
   );
 }
@@ -528,24 +538,23 @@ function WindParticles({ gridData, map }) {
 // ─── Map Canvas (overlays + timeline) ────────────────────────────────────────
 function MapCanvas({ sites, activeSiteId, onSelectSite, siteStatuses, weather, mapState, onMapStateChange, forecastDays, onForecastDaysChange }) {
   const mapInstanceRef = useRef(null);
-  const [mapLoaded, setMapLoaded] = useState(false);
-  const [windGrid,  setWindGrid]  = useState(null);
+  const [mapInstance, setMapInstance] = useState(null);
+  const [windGrid,    setWindGrid]    = useState(null);
   const ALTITUDES = [500, 1000, 1500, 2000, 3000];
   const isWind = WIND_OVERLAYS.has(mapState.overlay);
 
   useEffect(() => {
-    if (!isWind || !mapLoaded || !mapInstanceRef.current) {
+    if (!isWind || !mapInstance) {
       if (!isWind) setWindGrid(null);
       return;
     }
-    const map = mapInstanceRef.current;
     let tid;
 
     const refresh = () => {
       clearTimeout(tid);
       tid = setTimeout(async () => {
-        const b    = map.getBounds();
-        const step = computeGridStep(map);
+        const b    = mapInstance.getBounds();
+        const step = computeGridStep(mapInstance);
         const altM = mapState.overlay === "altitude_wind" ? mapState.altitudeM : 0;
         try {
           const data = await api.windGrid(
@@ -554,19 +563,21 @@ function MapCanvas({ sites, activeSiteId, onSelectSite, siteStatuses, weather, m
             step, altM,
           );
           setWindGrid(data);
-        } catch { /* ignore */ }
+        } catch (e) {
+          console.error("wind-grid fetch failed:", e);
+        }
       }, 300);
     };
 
-    map.on("moveend", refresh);
-    map.on("zoomend", refresh);
+    mapInstance.on("moveend", refresh);
+    mapInstance.on("zoomend", refresh);
     refresh();
     return () => {
       clearTimeout(tid);
-      map.off("moveend", refresh);
-      map.off("zoomend", refresh);
+      mapInstance.off("moveend", refresh);
+      mapInstance.off("zoomend", refresh);
     };
-  }, [isWind, mapLoaded, mapState.overlay, mapState.altitudeM]);
+  }, [isWind, mapInstance, mapState.overlay, mapState.altitudeM]);
 
   return (
     <main className="mapShell">
@@ -577,12 +588,12 @@ function MapCanvas({ sites, activeSiteId, onSelectSite, siteStatuses, weather, m
         siteStatuses={siteStatuses}
         onMapReady={map => {
           mapInstanceRef.current = map;
-          if (map.loaded()) setMapLoaded(true);
-          else map.once("load", () => setMapLoaded(true));
+          if (map.loaded()) setMapInstance(map);
+          else map.once("load", () => setMapInstance(map));
         }}
       />
-      {isWind && windGrid && mapLoaded && mapInstanceRef.current && (
-        <WindParticles gridData={windGrid} map={mapInstanceRef.current} />
+      {isWind && mapInstance && (
+        <WindParticles gridData={windGrid} map={mapInstance} />
       )}
 
       <div className="topLegend">
