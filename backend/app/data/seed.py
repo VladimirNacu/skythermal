@@ -4,12 +4,12 @@ from uuid import UUID
 from backend.app.models import LaunchSite, PilotLevel, WeatherHour
 
 # ─── Site IDs — Romania (Carpathians / Transylvania) first ────────────────────
-BUNLOC_ID     = UUID("ro000001-ro00-4ro0-8ro0-ro0000000001")
-POSTAVARU_ID  = UUID("ro000002-ro00-4ro0-8ro0-ro0000000002")
-LEMPES_ID     = UUID("ro000003-ro00-4ro0-8ro0-ro0000000003")
-SINAIA_ID     = UUID("ro000004-ro00-4ro0-8ro0-ro0000000004")
-CLOPOTIVA_ID  = UUID("ro000005-ro00-4ro0-8ro0-ro0000000005")
-RIMETEA_ID    = UUID("ro000006-ro00-4ro0-8ro0-ro0000000006")
+BUNLOC_ID     = UUID("b0000001-0000-4000-8000-000000000001")
+POSTAVARU_ID  = UUID("b0000002-0000-4000-8000-000000000002")
+LEMPES_ID     = UUID("b0000003-0000-4000-8000-000000000003")
+SINAIA_ID     = UUID("b0000004-0000-4000-8000-000000000004")
+CLOPOTIVA_ID  = UUID("b0000005-0000-4000-8000-000000000005")
+RIMETEA_ID    = UUID("b0000006-0000-4000-8000-000000000006")
 # Romania — Maramureș / Baia Mare area
 CREASTA_ID    = UUID("aa000001-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
 MOGOSA_ID     = UUID("aa000002-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
