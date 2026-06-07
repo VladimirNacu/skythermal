@@ -145,6 +145,17 @@ function useMapState() {
   return [state, update];
 }
 
+function useMediaQuery(query) {
+  const [matches, setMatches] = useState(() => window.matchMedia(query).matches);
+  useEffect(() => {
+    const mq = window.matchMedia(query);
+    const handler = e => setMatches(e.matches);
+    mq.addEventListener("change", handler);
+    return () => mq.removeEventListener("change", handler);
+  }, [query]);
+  return matches;
+}
+
 // ─── Small components ─────────────────────────────────────────────────────────
 function Spinner() {
   return <div className="spinner-wrap"><Loader size={22} className="spin" /></div>;
@@ -160,7 +171,7 @@ function ErrorBanner({ message }) {
 }
 
 // ─── Sidebar ─────────────────────────────────────────────────────────────────
-function Sidebar({ sites, activeSiteId, onSelectSite, bestStatus, mapState, onMapStateChange, searchQuery, onSearchChange }) {
+function Sidebar({ sites, activeSiteId, onSelectSite, bestStatus, mapState, onMapStateChange, searchQuery, onSearchChange, isOpen, onClose }) {
   const driveStatus = bestStatus ?? "UNKNOWN";
   const driveColor  = statusColor(driveStatus);
   const driveCopy   = {
@@ -171,7 +182,7 @@ function Sidebar({ sites, activeSiteId, onSelectSite, bestStatus, mapState, onMa
   }[driveStatus];
 
   return (
-    <aside className="sidebar">
+    <aside className={`sidebar${isOpen ? " is-open" : ""}`}>
       <div className="brand">
         <div className="brandMark">▰</div>
         <span>SkyThermal <small style={{ fontSize: "0.55em", opacity: 0.6, fontWeight: 500 }}>RO</small></span>
@@ -414,7 +425,7 @@ function computeGridStep(map) {
 // Trail: ping-pong RGBA8 FBOs; fade → additive draw → blit to MapLibre framebuffer.
 
 function createWindGLLayer() {
-  const N  = 25000;      // particle count
+  const N  = window.innerWidth < 768 ? 3500 : 25000;
   const LW = 128, LH = 128;  // wind LUT dimensions
 
   // ── GLSL shaders ──────────────────────────────────────────────────────────
@@ -425,7 +436,7 @@ void main(){gl_Position=vec4(a_pos,0.,1.);v_uv=a_pos*.5+.5;}`;
   const FS_FADE = `#version 300 es
 precision mediump float;
 in vec2 v_uv;uniform sampler2D u_tex;out vec4 c;
-void main(){c=texture(u_tex,v_uv)*.93;}`;
+void main(){c=texture(u_tex,v_uv)*.965;}`;
 
   const FS_BLIT = `#version 300 es
 precision mediump float;
@@ -438,7 +449,7 @@ in vec4 a_p;out float v_spd;out float v_age;
 void main(){
   v_spd=a_p.z;v_age=a_p.w;
   gl_Position=vec4(a_p.x*2.-1.,1.-a_p.y*2.,0.,1.);
-  gl_PointSize=3.;
+  gl_PointSize=4.;
 }`;
 
   const FS_PARTICLE = `#version 300 es
@@ -746,8 +757,40 @@ function WindParticlesGL({ gridData, map }) {
   return null;
 }
 
+// ─── Weather raster overlay controller ───────────────────────────────────────
+// Adds colored raster tiles for non-wind overlays. Tiles 404 until backend
+// implements /v1/tiles/{overlay}/{z}/{x}/{y}.png — MapLibre shows nothing gracefully.
+function WeatherOverlayController({ map, overlay, altitudeM }) {
+  useEffect(() => {
+    if (!map) return;
+    const SRC_ID = "wx-raster-src";
+    const LYR_ID = "wx-raster-layer";
+    const cleanup = () => {
+      try { if (map.getLayer(LYR_ID)) map.removeLayer(LYR_ID); } catch (_) {}
+      try { if (map.getSource(SRC_ID)) map.removeSource(SRC_ID); } catch (_) {}
+    };
+    cleanup();
+    if (!WIND_OVERLAYS.has(overlay)) {
+      try {
+        map.addSource(SRC_ID, {
+          type: "raster",
+          tiles: [`${BASE}/v1/tiles/${overlay}/{z}/{x}/{y}.png?altitude_m=${altitudeM}`],
+          tileSize: 256,
+        });
+        const before = map.getLayer("wind-gl") ? "wind-gl" : undefined;
+        map.addLayer({
+          id: LYR_ID, type: "raster", source: SRC_ID,
+          paint: { "raster-opacity": 0.72, "raster-fade-duration": 250 },
+        }, before);
+      } catch (_) {}
+    }
+    return cleanup;
+  }, [map, overlay, altitudeM]);
+  return null;
+}
+
 // ─── Map Canvas (overlays + timeline) ────────────────────────────────────────
-function MapCanvas({ sites, activeSiteId, onSelectSite, siteStatuses, weather, mapState, onMapStateChange, forecastDays, onForecastDaysChange }) {
+function MapCanvas({ sites, activeSiteId, onSelectSite, siteStatuses, weather, mapState, onMapStateChange, forecastDays, onForecastDaysChange, onOpenSidebar }) {
   const mapInstanceRef = useRef(null);
   const [mapInstance, setMapInstance] = useState(null);
   const [windGrid,    setWindGrid]    = useState(null);
@@ -807,6 +850,21 @@ function MapCanvas({ sites, activeSiteId, onSelectSite, siteStatuses, weather, m
       {isWind && mapInstance && (
         <WindParticlesGL gridData={windGrid} map={mapInstance} />
       )}
+      {mapInstance && (
+        <WeatherOverlayController map={mapInstance} overlay={mapState.overlay} altitudeM={mapState.altitudeM} />
+      )}
+
+      {/* Mobile: floating search pill */}
+      <button className="mobileSearchPill" onClick={onOpenSidebar}>
+        <Search size={16} />
+        <span>Search launch site…</span>
+      </button>
+
+      {/* Mobile: floating layers FAB */}
+      <button className="mobileLayerFab" onClick={onOpenSidebar}>
+        <Layers size={20} />
+        <span>Layers</span>
+      </button>
 
       <div className="topLegend">
         <span>Wind (km/h)</span>
@@ -1161,6 +1219,7 @@ function App() {
   const [searchQuery, setSearchQuery]   = useState("");
   const [forecastDays, setForecastDays] = useState(1);
   const [pilotLevel, setPilotLevel]     = useState("intermediate");
+  const [sidebarOpen, setSidebarOpen]   = useState(false);
 
   const filteredSites = useMemo(() => {
     if (!sites?.length) return [];
@@ -1232,15 +1291,20 @@ function App() {
 
   return (
     <div className="app">
+      {sidebarOpen && (
+        <div className="sidebarBackdrop" onClick={() => setSidebarOpen(false)} />
+      )}
       <Sidebar
         sites={filteredSites}
         activeSiteId={activeSite?.id}
-        onSelectSite={setActiveSite}
+        onSelectSite={site => { setActiveSite(site); setSidebarOpen(false); }}
         bestStatus={bestStatus}
         mapState={mapState}
         onMapStateChange={setMapState}
         searchQuery={searchQuery}
         onSearchChange={setSearchQuery}
+        isOpen={sidebarOpen}
+        onClose={() => setSidebarOpen(false)}
       />
       <MapCanvas
         sites={sites ?? []}
@@ -1252,6 +1316,7 @@ function App() {
         onMapStateChange={setMapState}
         forecastDays={forecastDays}
         onForecastDaysChange={setForecastDays}
+        onOpenSidebar={() => setSidebarOpen(true)}
       />
       {activeSite && (
         <RightPanel site={activeSite} onClose={() => setActiveSite(null)} pilotLevel={pilotLevel} forecastDays={forecastDays} />
