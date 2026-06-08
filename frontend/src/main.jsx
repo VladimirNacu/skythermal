@@ -436,7 +436,7 @@ void main(){gl_Position=vec4(a_pos,0.,1.);v_uv=a_pos*.5+.5;}`;
   const FS_FADE = `#version 300 es
 precision mediump float;
 in vec2 v_uv;uniform sampler2D u_tex;out vec4 c;
-void main(){c=texture(u_tex,v_uv)*.975;}`;
+void main(){c=texture(u_tex,v_uv)*.965;}`;
 
   const FS_BLIT = `#version 300 es
 precision mediump float;
@@ -449,7 +449,7 @@ in vec4 a_p;out float v_spd;out float v_age;
 void main(){
   v_spd=a_p.z;v_age=a_p.w;
   gl_Position=vec4(a_p.x*2.-1.,1.-a_p.y*2.,0.,1.);
-  gl_PointSize=6.5;
+  gl_PointSize=4.;
 }`;
 
   const FS_PARTICLE = `#version 300 es
@@ -467,7 +467,7 @@ vec3 wc(float k){
 void main(){
   vec2 cxy=2.*gl_PointCoord-1.;
   if(dot(cxy,cxy)>1.)discard;
-  float a=min(1.,v_age/8.)*max(.45,min(1.,v_spd/15.))*(1.-length(cxy)*.85);
+  float a=min(.9,v_age/15.)*max(.15,min(1.,v_spd/20.))*(1.-length(cxy));
   vec3 col=wc(v_spd);
   c=vec4(col*a,a);
 }`;
