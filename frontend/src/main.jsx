@@ -7,7 +7,7 @@ import {
   Thermometer, Mountain, Gauge, Car, Navigation, Layers,
   Crosshair, Maximize, Ruler, Play, Pause, ChevronDown,
   MapPin, Plane, BrainCircuit, Clock, ShieldAlert, Cloud, Activity,
-  AlertTriangle, Loader, Compass
+  AlertTriangle, Loader, Compass, LogIn, LogOut, UserCircle, Settings
 } from "lucide-react";
 import "./styles.css";
 
@@ -46,6 +46,44 @@ const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     }).then(r => { if (!r.ok) throw new Error(r.statusText); return r.json(); }),
+
+  register: (email, password, display_name) =>
+    fetch(`${BASE}/v1/auth/register`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, password, display_name }),
+    }).then(r => r.json()),
+
+  login: (email, password) =>
+    fetch(`${BASE}/v1/auth/login`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, password }),
+    }).then(r => r.json()),
+
+  me: (token) =>
+    fetch(`${BASE}/v1/auth/me`, { headers: { Authorization: `Bearer ${token}` } }).then(r => r.ok ? r.json() : null),
+
+  getFavorites: (token) =>
+    fetch(`${BASE}/v1/users/me/favorites`, { headers: { Authorization: `Bearer ${token}` } }).then(r => r.json()),
+
+  addFavorite: (token, site_id, site_data) =>
+    fetch(`${BASE}/v1/users/me/favorites`, {
+      method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ site_id, site_data }),
+    }).then(r => r.json()),
+
+  removeFavorite: (token, site_id) =>
+    fetch(`${BASE}/v1/users/me/favorites/${encodeURIComponent(site_id)}`, {
+      method: "DELETE", headers: { Authorization: `Bearer ${token}` },
+    }).then(r => r.json()),
+
+  getSettings: (token) =>
+    fetch(`${BASE}/v1/users/me/settings`, { headers: { Authorization: `Bearer ${token}` } }).then(r => r.json()),
+
+  saveSettings: (token, settings) =>
+    fetch(`${BASE}/v1/users/me/settings`, {
+      method: "PUT", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify(settings),
+    }).then(r => r.json()),
 
   briefing: (siteId, pilotLevel = "intermediate") => {
     const now = new Date().toISOString();
@@ -193,6 +231,91 @@ function ErrorBanner({ message }) {
   );
 }
 
+// ─── Auth hook ────────────────────────────────────────────────────────────────
+function useAuth() {
+  const [user,  setUser]  = useState(null);
+  const [token, setToken] = useState(() => localStorage.getItem("st_token"));
+  const [ready, setReady] = useState(false);
+
+  useEffect(() => {
+    if (!token) { setReady(true); return; }
+    api.me(token).then(u => {
+      if (u) setUser(u); else { setToken(null); localStorage.removeItem("st_token"); }
+      setReady(true);
+    });
+  }, []);
+
+  const signIn = useCallback((userData, tok) => {
+    localStorage.setItem("st_token", tok);
+    setToken(tok); setUser(userData);
+  }, []);
+
+  const signOut = useCallback(() => {
+    localStorage.removeItem("st_token");
+    setToken(null); setUser(null);
+  }, []);
+
+  return { user, token, ready, signIn, signOut };
+}
+
+// ─── Auth Modal ───────────────────────────────────────────────────────────────
+function AuthModal({ onClose, onSignIn }) {
+  const [tab,     setTab]     = useState("login");
+  const [email,   setEmail]   = useState("");
+  const [pass,    setPass]    = useState("");
+  const [name,    setName]    = useState("");
+  const [loading, setLoading] = useState(false);
+  const [err,     setErr]     = useState(null);
+
+  async function submit(e) {
+    e.preventDefault();
+    setLoading(true); setErr(null);
+    const result = tab === "login"
+      ? await api.login(email, pass)
+      : await api.register(email, pass, name || undefined);
+    setLoading(false);
+    if (result.detail) { setErr(result.detail); return; }
+    if (!result.token) { setErr("Unexpected error"); return; }
+    onSignIn(result.user, result.token);
+    onClose();
+  }
+
+  return (
+    <div className="modalOverlay" onClick={e => e.target === e.currentTarget && onClose()}>
+      <div className="modalBox">
+        <div className="modalHeader">
+          <span>{tab === "login" ? "Sign in" : "Create account"}</span>
+          <button className="iconButton small" onClick={onClose}>✕</button>
+        </div>
+        <div className="authTabs">
+          <button className={tab === "login" ? "active" : ""} onClick={() => setTab("login")}>Sign in</button>
+          <button className={tab === "register" ? "active" : ""} onClick={() => setTab("register")}>Register</button>
+        </div>
+        <form className="modalForm" onSubmit={submit}>
+          {tab === "register" && (
+            <label>Display name
+              <input value={name} onChange={e => setName(e.target.value)} placeholder="Your name" />
+            </label>
+          )}
+          <label>Email
+            <input required type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="you@example.com" />
+          </label>
+          <label>Password
+            <input required type="password" value={pass} onChange={e => setPass(e.target.value)} placeholder={tab === "register" ? "Min. 6 characters" : "Password"} minLength={6} />
+          </label>
+          {err && <p className="modalError">{typeof err === "string" ? err : JSON.stringify(err)}</p>}
+          <div className="modalActions">
+            <button type="button" className="btnSecondary" onClick={onClose}>Cancel</button>
+            <button type="submit" className="btnPrimary" disabled={loading}>
+              {loading ? "…" : tab === "login" ? "Sign in" : "Create account"}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
 // ─── Add Site Modal ───────────────────────────────────────────────────────────
 function AddSiteModal({ onClose, onCreated }) {
   const [form, setForm] = useState({
@@ -280,7 +403,7 @@ function AddSiteModal({ onClose, onCreated }) {
 }
 
 // ─── Sidebar ─────────────────────────────────────────────────────────────────
-function Sidebar({ sites, activeSiteId, onSelectSite, bestStatus, mapState, onMapStateChange, searchQuery, onSearchChange, isOpen, onClose, onAddSite }) {
+function Sidebar({ sites, activeSiteId, onSelectSite, bestStatus, mapState, onMapStateChange, searchQuery, onSearchChange, isOpen, onClose, onAddSite, user, onSignIn, onSignOut, favoriteSiteIds, onToggleFavorite }) {
   const driveStatus = bestStatus ?? "UNKNOWN";
   const driveColor  = statusColor(driveStatus);
   const driveCopy   = {
@@ -295,6 +418,15 @@ function Sidebar({ sites, activeSiteId, onSelectSite, bestStatus, mapState, onMa
       <div className="brand">
         <div className="brandMark">▰</div>
         <span>SkyThermal <small style={{ fontSize: "0.55em", opacity: 0.6, fontWeight: 500 }}>RO</small></span>
+        {user ? (
+          <div className="userChip" title={user.email}>
+            <UserCircle size={16} />
+            <span>{user.display_name || user.email.split("@")[0]}</span>
+            <button className="iconButton small" onClick={onSignOut} title="Sign out"><LogOut size={13} /></button>
+          </div>
+        ) : (
+          <button className="iconButton small" onClick={onSignIn} title="Sign in"><LogIn size={16} /></button>
+        )}
       </div>
 
       <div className="searchBox">
@@ -324,7 +456,12 @@ function Sidebar({ sites, activeSiteId, onSelectSite, bestStatus, mapState, onMa
               <b>{site.name}</b>
               <small>{site.region} · {site.country_code}</small>
             </span>
-            <Star size={14} className={activeSiteId === site.id ? "starOn" : ""} />
+            <Star
+              size={14}
+              className={favoriteSiteIds?.has(site.id) ? "starOn" : ""}
+              onClick={e => { e.stopPropagation(); onToggleFavorite?.(site); }}
+              style={{ cursor: user ? "pointer" : "default", opacity: user ? 1 : 0.3 }}
+            />
           </button>
         ))}
       </div>
@@ -1358,6 +1495,9 @@ function RightPanel({ site, onClose, pilotLevel = "intermediate", forecastDays =
 
 // ─── App ──────────────────────────────────────────────────────────────────────
 function App() {
+  const { user, token, ready: authReady, signIn, signOut } = useAuth();
+  const [showAuthModal, setShowAuthModal] = useState(false);
+
   const { data: sites, loading, error } = useAsync(() => api.listSites(), []);
   const [activeSite, setActiveSite]     = useState(null);
   const [bestStatus, setBestStatus]     = useState(null);
@@ -1369,6 +1509,46 @@ function App() {
   const [sidebarOpen, setSidebarOpen]   = useState(false);
   const [showAddSite, setShowAddSite]   = useState(false);
   const [extraSites, setExtraSites]     = useState([]);
+  const [favoriteSiteIds, setFavoriteSiteIds] = useState(new Set());
+
+  // Load favorites + settings when user logs in
+  useEffect(() => {
+    if (!user || !token) { setFavoriteSiteIds(new Set()); return; }
+    api.getFavorites(token).then(favs => {
+      setFavoriteSiteIds(new Set(favs.map(f => f.site_id)));
+    }).catch(() => {});
+    api.getSettings(token).then(s => {
+      if (s.pilot_level)       setPilotLevel(s.pilot_level);
+      if (s.default_overlay)   setMapState({ overlay: s.default_overlay });
+      if (s.default_altitude_m !== undefined) setMapState({ altitudeM: s.default_altitude_m });
+    }).catch(() => {});
+  }, [user?.id]);
+
+  // Save settings debounced when they change
+  const settingsSaveRef = useRef(null);
+  useEffect(() => {
+    if (!token) return;
+    clearTimeout(settingsSaveRef.current);
+    settingsSaveRef.current = setTimeout(() => {
+      api.saveSettings(token, {
+        pilot_level: pilotLevel,
+        default_overlay: mapState.overlay,
+        default_altitude_m: mapState.altitudeM ?? 0,
+      }).catch(() => {});
+    }, 1500);
+  }, [pilotLevel, mapState.overlay, mapState.altitudeM, token]);
+
+  const toggleFavorite = useCallback(async (site) => {
+    if (!token) { setShowAuthModal(true); return; }
+    const id = String(site.id);
+    if (favoriteSiteIds.has(id)) {
+      await api.removeFavorite(token, id).catch(() => {});
+      setFavoriteSiteIds(prev => { const s = new Set(prev); s.delete(id); return s; });
+    } else {
+      await api.addFavorite(token, id, site).catch(() => {});
+      setFavoriteSiteIds(prev => new Set([...prev, id]));
+    }
+  }, [token, favoriteSiteIds]);
 
   const allSites = useMemo(() => [...(sites ?? []), ...extraSites], [sites, extraSites]);
 
@@ -1442,6 +1622,12 @@ function App() {
 
   return (
     <div className="app">
+      {showAuthModal && (
+        <AuthModal
+          onClose={() => setShowAuthModal(false)}
+          onSignIn={(u, tok) => { signIn(u, tok); setShowAuthModal(false); }}
+        />
+      )}
       {showAddSite && (
         <AddSiteModal
           onClose={() => setShowAddSite(false)}
@@ -1463,6 +1649,11 @@ function App() {
         isOpen={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
         onAddSite={() => setShowAddSite(true)}
+        user={user}
+        onSignIn={() => setShowAuthModal(true)}
+        onSignOut={signOut}
+        favoriteSiteIds={favoriteSiteIds}
+        onToggleFavorite={toggleFavorite}
       />
       <MapCanvas
         sites={allSites}

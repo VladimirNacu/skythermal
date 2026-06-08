@@ -1334,3 +1334,60 @@ button {
 }
 
 .btnSecondary:hover { background: rgba(255, 255, 255, 0.12); }
+
+/* ─── Auth UI ─────────────────────────────────────────────────────────────── */
+.authTabs {
+  display: flex;
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+}
+
+.authTabs button {
+  flex: 1;
+  padding: 10px;
+  background: none;
+  border: none;
+  color: var(--text-muted, rgba(180,210,255,0.6));
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: all 0.15s;
+}
+
+.authTabs button.active {
+  color: var(--text, #e8f4ff);
+  border-bottom-color: rgba(47,155,255,0.8);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.userChip {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  background: rgba(47,155,255,0.12);
+  border: 1px solid rgba(47,155,255,0.25);
+  border-radius: 20px;
+  padding: 3px 8px 3px 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: rgba(140,200,255,0.9);
+  max-width: 160px;
+  overflow: hidden;
+}
+
+.userChip span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.starOn {
+  fill: #f59e0b;
+  color: #f59e0b;
+}
