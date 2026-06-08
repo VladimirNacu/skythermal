@@ -7,7 +7,7 @@ from passlib.context import CryptContext
 
 from backend.app.database import db
 
-_crypt = CryptContext(schemes=["bcrypt"], deprecated="auto")
+_crypt = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
 _SECRET = os.getenv("JWT_SECRET", "skythermal-dev-secret-change-in-prod")
 _ALGO   = "HS256"
 _TTL    = timedelta(days=30)
