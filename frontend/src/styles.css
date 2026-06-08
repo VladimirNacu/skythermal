@@ -50,9 +50,8 @@ button {
 
 .app {
   display: grid;
-  grid-template-columns: 280px 1fr 430px;
+  grid-template-columns: 280px minmax(0, 1fr) 390px;
   height: 100vh;
-  min-width: 1200px;
   background: var(--bg-app);
 }
 
@@ -921,16 +920,18 @@ button {
 
 @media (max-width: 1300px) {
   .app {
-    grid-template-columns: 245px 1fr 370px;
+    grid-template-columns: 245px minmax(0, 1fr) 340px;
   }
 
   .rightPanel {
     padding-left: 12px;
     padding-right: 12px;
+    width: 340px;
+    min-width: 340px;
   }
 
-  .metricBody strong {
-    font-size: 24px;
+  .metricGrid {
+    grid-template-columns: 1fr;
   }
 
   .topLegend {
@@ -965,6 +966,87 @@ button {
 }
 
 .goBar span { flex: 1; }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Visual readability patch — brighter map, stronger overlays, cleaner panels
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* Fix 1 — brighter, more contrasty MapLibre canvas */
+.maplibregl-canvas {
+  filter: brightness(1.18) contrast(1.22) saturate(1.2);
+}
+
+/* Fix 3 — site marker labels */
+.ml-label {
+  color: #fff;
+  font-weight: 800;
+  font-size: 12px;
+  background: rgba(2, 10, 20, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.24);
+  padding: 4px 9px;
+  border-radius: 6px;
+  text-shadow: 0 1px 3px #000, 0 0 8px #000;
+}
+
+/* Fix 4 — lighter panels */
+:root {
+  --panel:  rgba(9, 22, 38, 0.90);
+  --panel2: rgba(13, 33, 55, 0.88);
+  --stroke: rgba(180, 220, 255, 0.22);
+}
+
+.metricCard,
+.miniForecast,
+.aiCard,
+.launchWindow {
+  background: rgba(13, 33, 55, 0.94);
+  border: 1px solid rgba(180, 220, 255, 0.22);
+}
+
+/* Fix 5 — right panel width locked */
+.mapShell { min-width: 0; }
+
+.rightPanel {
+  width: 390px;
+  min-width: 390px;
+}
+
+/* Fix 6 — larger metric numbers */
+.metricBody strong {
+  font-size: 34px;
+  line-height: 1;
+}
+
+.metricCard > span {
+  color: #bfd9ec;
+  font-size: 12px;
+}
+
+.metricCard p {
+  color: #dbeeff;
+  font-size: 14px;
+}
+
+.goBar {
+  font-size: 16px;
+  padding: 18px 20px;
+}
+
+.goBar b {
+  font-size: 30px;
+}
+
+/* Fix 7 — clearer legend bar */
+.topLegend {
+  background: rgba(4, 14, 25, 0.94);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  box-shadow: 0 8px 35px rgba(0, 0, 0, 0.55);
+}
+
+.legendGradient {
+  height: 28px;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18);
+}
 
 /* ── Mobile-first Windy layout ──────────────────────────────────────── */
 /* Desktop: 3-column grid. Mobile: full-screen map + slide-in drawer + bottom sheet */

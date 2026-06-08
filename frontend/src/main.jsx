@@ -799,7 +799,7 @@ function WeatherOverlayController({ map, overlay, altitudeM, selectedTime }) {
         const before = map.getLayer("wind-gl") ? "wind-gl" : undefined;
         map.addLayer({
           id: LYR_ID, type: "raster", source: SRC_ID,
-          paint: { "raster-opacity": 0.75, "raster-fade-duration": 300 },
+          paint: { "raster-opacity": 0.78, "raster-fade-duration": 300 },
         }, before);
       } catch (_) {}
     }
