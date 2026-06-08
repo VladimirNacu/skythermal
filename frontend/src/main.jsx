@@ -580,28 +580,28 @@ function Sidebar({ sites, activeSiteId, onSelectSite, bestStatus, mapState, onMa
 // ─── MapLibre marker DOM builder ──────────────────────────────────────────────
 // Uses flexbox column (no absolute positioning) so MapLibre overflow:hidden can't clip children.
 function buildMarkerEl(site, status, windDeg, windKmh, isActive, onClick) {
-  const color  = isActive ? "#2f9bff" : statusHex(status);
+  const pinColor  = statusHex(status);   // always green/red/yellow/grey — blue only for active ring
+  const arrowColor = isActive ? "#2f9bff" : pinColor;
   const blowTo = windDeg != null ? (windDeg + 180) % 360 : 0;
 
   const el = document.createElement("div");
   el.className = "ml-marker" + (isActive ? " is-active" : "");
 
-  // Wind arrow — rendered ABOVE the pin in flex column order
   const windHtml = windDeg != null ? `
     <div class="ml-wind">
-      <svg width="18" height="18" viewBox="0 0 22 22" xmlns="http://www.w3.org/2000/svg">
+      <svg width="16" height="16" viewBox="0 0 22 22" xmlns="http://www.w3.org/2000/svg">
         <g transform="rotate(${blowTo},11,11)">
-          <line x1="11" y1="17" x2="11" y2="4" stroke="${color}" stroke-width="2.5" stroke-linecap="round"/>
-          <polygon points="11,1 6.5,8.5 15.5,8.5" fill="${color}"/>
+          <line x1="11" y1="17" x2="11" y2="4" stroke="${arrowColor}" stroke-width="2.5" stroke-linecap="round"/>
+          <polygon points="11,1 6.5,8.5 15.5,8.5" fill="${arrowColor}"/>
         </g>
       </svg>
-      <span class="ml-wind-spd" style="color:${color}">${windKmh}</span>
+      <span class="ml-wind-spd" style="color:${arrowColor}">${windKmh}</span>
     </div>` : "";
 
   el.innerHTML = `
     ${windHtml}
-    <div class="ml-pin" style="background:${color}">
-      <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="white">
+    <div class="ml-pin" style="background:${pinColor}">
+      <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="white">
         <path d="M21 16v-2l-8-5V3.5c0-.83-.67-1.5-1.5-1.5S10 2.67 10 3.5V9l-8 5v2l8-2.5V19l-2 1.5V22l3.5-1 3.5 1v-1.5L13 19v-5.5z"/>
       </svg>
     </div>
