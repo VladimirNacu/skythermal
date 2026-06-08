@@ -35,7 +35,26 @@ def tile_bbox(z: int, x: int, y: int) -> tuple[float, float, float, float]:
 # ─── Colour ramps: (value, (R, G, B, A)) ─────────────────────────────────────
 # Each overlay defines its own ramp; values outside the range clamp to end stops.
 
+_WIND_SPEED_RAMP = [
+    # matches the legend gradient already in the UI
+    # km/h → (R, G, B, A)
+    (0,   (38,  123, 212, 0)),    # transparent at 0
+    (5,   (38,  123, 212, 160)),  # #267bd4
+    (15,  (28,  192, 178, 185)),  # #1cc0b2
+    (25,  (89,  197, 90,  200)),  # #59c55a
+    (35,  (210, 189, 50,  210)),  # #d2bd32
+    (45,  (241, 133, 45,  220)),  # #f1852d
+    (60,  (221, 72,  74,  228)),  # #dd484a
+    (75,  (195, 49,  144, 235)),  # #c33190
+    (90,  (115, 43,  206, 242)),  # #732bce
+]
+
 RAMPS: dict[str, list[tuple]] = {
+    # Wind speed overlays — use the shared ramp
+    "surface_wind":  _WIND_SPEED_RAMP,
+    "altitude_wind": _WIND_SPEED_RAMP,
+    "gusts":         _WIND_SPEED_RAMP,
+
     "temperature_dewpoint": [
         (-20, (10,  30, 140, 215)),
         (0,   (40,  85, 200, 215)),
@@ -105,8 +124,16 @@ RAMPS: dict[str, list[tuple]] = {
     ],
 }
 
+_WIND_VARS_ALL = (
+    "windspeed_10m,windspeed_925hPa,windspeed_850hPa,"
+    "windspeed_800hPa,windspeed_750hPa,windspeed_700hPa"
+)
+
 # Open-Meteo hourly variable(s) needed per overlay
 _OVL_VARS: dict[str, str] = {
+    "surface_wind":         "windspeed_10m",
+    "altitude_wind":        _WIND_VARS_ALL,
+    "gusts":                "windgusts_10m",
     "temperature_dewpoint": "temperature_2m",
     "cloudbase":            "temperature_2m,dewpoint_2m",
     "thermals":             "cape,cloudcover",
@@ -119,11 +146,39 @@ _OVL_VARS: dict[str, str] = {
 
 # ─── Value extractor ──────────────────────────────────────────────────────────
 
-def _val(overlay: str, hourly: dict, idx: int, hour: int) -> float | None:
+def _val(overlay: str, hourly: dict, idx: int, hour: int, altitude_m: int = 0) -> float | None:
     def g(key):
         vals = hourly.get(key, [])
         v = vals[idx] if idx < len(vals) else None
         return float(v) if v is not None else None
+
+    if overlay == "surface_wind":
+        return g("windspeed_10m") or 0.0
+
+    if overlay == "gusts":
+        return g("windgusts_10m") or 0.0
+
+    if overlay == "altitude_wind":
+        # Pick the variable matching the requested altitude
+        if altitude_m >= 2800:
+            v = g("windspeed_700hPa")
+        elif altitude_m >= 2200:
+            v = g("windspeed_750hPa")
+        elif altitude_m >= 1600:
+            v = g("windspeed_800hPa")
+        elif altitude_m >= 1000:
+            v = g("windspeed_850hPa")
+        elif altitude_m >= 400:
+            v = g("windspeed_925hPa")
+        else:
+            v = g("windspeed_10m")
+        # fall back through lower levels if pressure var is missing
+        if v is None:
+            for k in ("windspeed_850hPa", "windspeed_925hPa", "windspeed_10m"):
+                v = g(k)
+                if v is not None:
+                    break
+        return v or 0.0
 
     if overlay == "temperature_dewpoint":
         return g("temperature_2m")
@@ -264,7 +319,7 @@ def render_tile(
     for i, pt_data in enumerate(data[:len(points)]):
         col = i % GRID_N
         row = GRID_N - 1 - (i // GRID_N)   # invert lat axis (PIL y=0 = top)
-        val = _val(overlay, pt_data.get("hourly", {}), idx, target_hour)
+        val = _val(overlay, pt_data.get("hourly", {}), idx, target_hour, altitude_m)
         px[col, row] = _lerp(val, ramp) if val is not None else (0, 0, 0, 0)
 
     img = img_small.resize((TILE_PX, TILE_PX), Image.BILINEAR)

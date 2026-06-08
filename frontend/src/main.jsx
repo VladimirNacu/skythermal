@@ -465,7 +465,7 @@ in vec4 a_p;out float v_spd;out float v_age;
 void main(){
   v_spd=a_p.z;v_age=a_p.w;
   gl_Position=vec4(a_p.x*2.-1.,1.-a_p.y*2.,0.,1.);
-  gl_PointSize=4.;
+  gl_PointSize=5.;
 }`;
 
   const FS_PARTICLE = `#version 300 es
@@ -483,7 +483,7 @@ vec3 wc(float k){
 void main(){
   vec2 cxy=2.*gl_PointCoord-1.;
   if(dot(cxy,cxy)>1.)discard;
-  float a=min(.9,v_age/15.)*max(.15,min(1.,v_spd/20.))*(1.-length(cxy));
+  float a=min(1.,v_age/10.)*max(.28,min(1.,v_spd/18.))*(1.-length(cxy)*.8);
   vec3 col=wc(v_spd);
   c=vec4(col*a,a);
 }`;
@@ -776,6 +776,9 @@ function WindParticlesGL({ gridData, map }) {
 // ─── Weather raster overlay controller ───────────────────────────────────────
 // Adds colored raster tiles for non-wind overlays. Tiles 404 until backend
 // implements /v1/tiles/{overlay}/{z}/{x}/{y}.png — MapLibre shows nothing gracefully.
+// Always adds a coloured raster tile:
+//  • wind overlays  → wind-speed colour field (particles animate on top)
+//  • other overlays → data field (thermals, rain, temperature, etc.)
 function WeatherOverlayController({ map, overlay, altitudeM, selectedTime }) {
   useEffect(() => {
     if (!map) return;
@@ -786,23 +789,22 @@ function WeatherOverlayController({ map, overlay, altitudeM, selectedTime }) {
       try { if (map.getSource(SRC_ID)) map.removeSource(SRC_ID); } catch (_) {}
     };
     cleanup();
-    if (!WIND_OVERLAYS.has(overlay)) {
-      try {
-        const t = encodeURIComponent(selectedTime ?? nowHourISO());
-        map.addSource(SRC_ID, {
-          type: "raster",
-          tiles: [`${BASE}/v1/tiles/${overlay}/{z}/{x}/{y}.png?altitude_m=${altitudeM}&time=${t}`],
-          tileSize: 256,
-          minzoom: 2,
-          maxzoom: 10,
-        });
-        const before = map.getLayer("wind-gl") ? "wind-gl" : undefined;
-        map.addLayer({
-          id: LYR_ID, type: "raster", source: SRC_ID,
-          paint: { "raster-opacity": 0.78, "raster-fade-duration": 300 },
-        }, before);
-      } catch (_) {}
-    }
+    try {
+      const t = encodeURIComponent(selectedTime ?? nowHourISO());
+      map.addSource(SRC_ID, {
+        type: "raster",
+        tiles: [`${BASE}/v1/tiles/${overlay}/{z}/{x}/{y}.png?altitude_m=${altitudeM}&time=${t}`],
+        tileSize: 256,
+        minzoom: 2,
+        maxzoom: 10,
+      });
+      // Insert BELOW "wind-gl" so particles always render on top
+      const before = map.getLayer("wind-gl") ? "wind-gl" : undefined;
+      map.addLayer({
+        id: LYR_ID, type: "raster", source: SRC_ID,
+        paint: { "raster-opacity": 0.80, "raster-fade-duration": 300 },
+      }, before);
+    } catch (_) {}
     return cleanup;
   }, [map, overlay, altitudeM, selectedTime]);
   return null;
