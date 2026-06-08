@@ -153,8 +153,44 @@ const STATUS_HEX = { GO: "#43b547", MAYBE: "#f2b632", NO_GO: "#e84d5b", UNKNOWN:
 function statusColor(status) { return STATUS_CSS[status] ?? "red"; }
 function statusHex(status)   { return STATUS_HEX[status]  ?? "#4a7090"; }
 
-function fmtTime(isoString) {
-  return new Date(isoString).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+// Country → IANA timezone
+const CC_TZ = {
+  RO: "Europe/Bucharest", NO: "Europe/Oslo",   FR: "Europe/Paris",
+  DE: "Europe/Berlin",    AT: "Europe/Vienna",  CH: "Europe/Zurich",
+  IT: "Europe/Rome",      ES: "Europe/Madrid",  GB: "Europe/London",
+  TR: "Europe/Istanbul",  US: "America/New_York",
+};
+
+function siteTimezone(site) {
+  return CC_TZ[site?.country_code] ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
+}
+
+function fmtTime(isoString, tz) {
+  return new Date(isoString).toLocaleTimeString("en", {
+    hour: "2-digit", minute: "2-digit", hour12: false,
+    ...(tz ? { timeZone: tz } : {}),
+  });
+}
+
+function fmtDayLabel(isoString, tz) {
+  return new Date(isoString).toLocaleDateString("en", {
+    weekday: "short", day: "numeric", month: "short",
+    ...(tz ? { timeZone: tz } : {}),
+  });
+}
+
+function localDateKey(isoString, tz) {
+  return new Date(isoString).toLocaleDateString("en", {
+    year: "numeric", month: "2-digit", day: "2-digit",
+    ...(tz ? { timeZone: tz } : {}),
+  });
+}
+
+function tzAbbr(tz) {
+  try {
+    return new Intl.DateTimeFormat("en", { timeZone: tz, timeZoneName: "short" })
+      .formatToParts(new Date()).find(p => p.type === "timeZoneName")?.value ?? tz;
+  } catch { return tz; }
 }
 
 function useAsync(asyncFn, deps) {
@@ -1075,7 +1111,7 @@ function WeatherOverlayController({ map, overlay, altitudeM, selectedTime }) {
 }
 
 // ─── Map Canvas (overlays + timeline) ────────────────────────────────────────
-function MapCanvas({ sites, activeSiteId, onSelectSite, siteStatuses, weather, mapState, onMapStateChange, forecastDays, onForecastDaysChange, onOpenSidebar }) {
+function MapCanvas({ sites, activeSiteId, onSelectSite, siteStatuses, weather, mapState, onMapStateChange, forecastDays, onForecastDaysChange, onOpenSidebar, activeSite }) {
   const mapInstanceRef = useRef(null);
   const [mapInstance, setMapInstance] = useState(null);
   const [windGrid,    setWindGrid]    = useState(null);
@@ -1202,6 +1238,7 @@ function MapCanvas({ sites, activeSiteId, onSelectSite, siteStatuses, weather, m
         onForecastDaysChange={onForecastDaysChange}
         selectedTime={mapState.selectedTime}
         onTimeChange={t => onMapStateChange({ selectedTime: t })}
+        site={activeSite}
       />
     </main>
   );
@@ -1211,9 +1248,10 @@ function MapCanvas({ sites, activeSiteId, onSelectSite, siteStatuses, weather, m
 const RANGE_TO_DAYS = { "1D": 1, "3D": 3, "5D": 5 };
 const DAYS_TO_RANGE = { 1: "1D", 3: "3D", 5: "5D" };
 
-function Timeline({ weather, forecastDays = 1, onForecastDaysChange, selectedTime, onTimeChange }) {
+function Timeline({ weather, forecastDays = 1, onForecastDaysChange, selectedTime, onTimeChange, site }) {
   const range   = DAYS_TO_RANGE[forecastDays] ?? "1D";
   const [playing, setPlaying] = useState(false);
+  const tz = siteTimezone(site);
 
   const hours = weather ?? [];
   const selectedPrefix = (selectedTime ?? "").slice(0, 13); // "2026-06-07T11"
@@ -1231,7 +1269,8 @@ function Timeline({ weather, forecastDays = 1, onForecastDaysChange, selectedTim
     <section className="timelinePanel">
       <div className="timelineTop">
         <button className="dateButton">
-          Today <small>{new Date().toLocaleDateString([], { weekday: "short", day: "numeric", month: "short" })}</small>{" "}
+          Today <small>{new Date().toLocaleDateString("en", { weekday: "short", day: "numeric", month: "short", timeZone: tz })}</small>{" "}
+          <small style={{ fontSize: "0.75em", opacity: 0.45 }}>{tzAbbr(tz)}</small>
           <ChevronDown size={14} />
         </button>
         <button className="playButton" onClick={() => setPlaying(v => !v)}>
@@ -1239,7 +1278,7 @@ function Timeline({ weather, forecastDays = 1, onForecastDaysChange, selectedTim
         </button>
         <div className="timeTrack">
           {displayHours.map((h, i) => {
-            const label    = h.valid_time ? fmtTime(h.valid_time) : (h._label ?? "");
+            const label    = h.valid_time ? fmtTime(h.valid_time, tz) : (h._label ?? "");
             const isActive = h.valid_time && h.valid_time.slice(0, 13) === selectedPrefix;
             return (
               <span
@@ -1256,8 +1295,8 @@ function Timeline({ weather, forecastDays = 1, onForecastDaysChange, selectedTim
           })}
           <div className="currentTime">
             <b>{displayHours.find(h => h.valid_time?.slice(0,13) === selectedPrefix)
-                ? fmtTime(selectedTime)
-                : (displayHours[0]?.valid_time ? fmtTime(displayHours[0].valid_time) : "—")}</b>
+                ? fmtTime(selectedTime, tz)
+                : (displayHours[0]?.valid_time ? fmtTime(displayHours[0].valid_time, tz) : "—")}</b>
           </div>
         </div>
         <div className="rangeButtons">
@@ -1308,37 +1347,59 @@ function Metric({ title, value, suffix, note, ring, icon }) {
   );
 }
 
-function HourlyForecast({ weather }) {
+function HourlyForecast({ weather, site }) {
   if (!weather?.length) return null;
+  const tz = siteTimezone(site);
+
+  // Group hours by local date
+  const days = [];
+  let cur = null;
+  for (const h of weather) {
+    const key = localDateKey(h.valid_time, tz);
+    if (!cur || cur.key !== key) {
+      cur = { key, label: fmtDayLabel(h.valid_time, tz), hours: [] };
+      days.push(cur);
+    }
+    cur.hours.push(h);
+  }
+
   return (
     <div className="miniForecast">
-      <h3>Today · {new Date().toLocaleDateString([], { day: "numeric", month: "short" })}</h3>
-      <div className="forecastTable">
-        <div className="forecastRow head">
-          <span />
-          {weather.map(h => <b key={h.valid_time}>{fmtTime(h.valid_time)}</b>)}
+      <h3 style={{ display: "flex", alignItems: "center", gap: 6, justifyContent: "space-between" }}>
+        <span>Hourly Forecast</span>
+        <small style={{ fontSize: 11, opacity: 0.55, fontWeight: 400 }}>{tzAbbr(tz)}</small>
+      </h3>
+      {days.map(day => (
+        <div key={day.key} style={{ marginBottom: 10 }}>
+          <div className="forecastDayHeader">{day.label}</div>
+          <div className="forecastTable">
+            <div className="forecastRow head">
+              <span />
+              {day.hours.map(h => <b key={h.valid_time}>{fmtTime(h.valid_time, tz)}</b>)}
+            </div>
+            <div className="forecastRow">
+              <span>wind km/h</span>
+              {day.hours.map(h => <b key={h.valid_time}>{Math.round(h.wind_kmh)}</b>)}
+            </div>
+            <div className="forecastRow">
+              <span>gusts</span>
+              {day.hours.map(h => <b key={h.valid_time}>{Math.round(h.gust_kmh)}</b>)}
+            </div>
+            <div className="forecastRow">
+              <span>thermals</span>
+              {day.hours.map(h => <b key={h.valid_time}>{h.thermal_strength_ms?.toFixed(1) ?? "—"}</b>)}
+            </div>
+            <div className="forecastRow">
+              <span>cloud base</span>
+              {day.hours.map(h => <b key={h.valid_time}>{h.cloudbase_msl_m}</b>)}
+            </div>
+            <div className="forecastRow">
+              <span>rain mm</span>
+              {day.hours.map(h => <b key={h.valid_time}>{h.rain_mm}</b>)}
+            </div>
+          </div>
         </div>
-        <div className="forecastRow">
-          <span>km/h</span>
-          {weather.map(h => <b key={h.valid_time}>{Math.round(h.wind_kmh)}</b>)}
-        </div>
-        <div className="forecastRow">
-          <span>gusts</span>
-          {weather.map((h, i) => <b key={h.valid_time} className={i >= 1 ? "good" : ""}>{Math.round(h.gust_kmh)}</b>)}
-        </div>
-        <div className="forecastRow">
-          <span>thermals</span>
-          {weather.map((h, i) => <b key={h.valid_time} className={i >= 1 ? "good" : ""}>{h.thermal_strength_ms?.toFixed(1) ?? "—"}</b>)}
-        </div>
-        <div className="forecastRow">
-          <span>cloud base</span>
-          {weather.map(h => <b key={h.valid_time}>{h.cloudbase_msl_m}</b>)}
-        </div>
-        <div className="forecastRow">
-          <span>rain mm</span>
-          {weather.map(h => <b key={h.valid_time}>{h.rain_mm}</b>)}
-        </div>
-      </div>
+      ))}
     </div>
   );
 }
@@ -1434,7 +1495,7 @@ function RightPanel({ site, onClose, pilotLevel = "intermediate", forecastDays =
 
           {wxLoading && <Spinner />}
           {wxError   && <ErrorBanner message={`Weather error: ${wxError}`} />}
-          {weather   && <HourlyForecast weather={weather} />}
+          {weather   && <HourlyForecast weather={weather} site={site} />}
 
           <div className="aiCard">
             <h3><BrainCircuit size={20} /> AI Flight Briefing <em>BETA</em></h3>
@@ -1468,14 +1529,14 @@ function RightPanel({ site, onClose, pilotLevel = "intermediate", forecastDays =
         <>
           {wxLoading && <Spinner />}
           {wxError   && <ErrorBanner message={wxError} />}
-          {weather   && <HourlyForecast weather={weather} />}
+          {weather   && <HourlyForecast weather={weather} site={site} />}
           {timeline  && (
             <div className="miniForecast" style={{ marginTop: 12 }}>
               <h3>Flyability Timeline</h3>
               <div className="forecastTable">
                 <div className="forecastRow head">
                   <span />
-                  {timeline.map(h => <b key={h.valid_time}>{fmtTime(h.valid_time)}</b>)}
+                  {timeline.map(h => <b key={h.valid_time}>{fmtTime(h.valid_time, siteTimezone(site))}</b>)}
                 </div>
                 <div className="forecastRow">
                   <span>status</span>
@@ -1699,6 +1760,7 @@ function App() {
         forecastDays={forecastDays}
         onForecastDaysChange={setForecastDays}
         onOpenSidebar={() => setSidebarOpen(true)}
+        activeSite={activeSite}
       />
       {activeSite && (
         <RightPanel site={activeSite} onClose={() => setActiveSite(null)} pilotLevel={pilotLevel} forecastDays={forecastDays} />
