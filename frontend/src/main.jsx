@@ -74,7 +74,14 @@ const MAP_STYLE = {
       attribution: "© <a href='https://carto.com/'>CARTO</a> © <a href='https://www.openstreetmap.org/copyright'>OpenStreetMap</a>",
     },
   },
-  layers: [{ id: "carto-dark", type: "raster", source: "carto" }],
+  layers: [{
+    id: "carto-dark", type: "raster", source: "carto",
+    paint: {
+      "raster-brightness-min": 0.18,
+      "raster-contrast": 0.18,
+      "raster-saturation": -0.15,
+    },
+  }],
 };
 
 // ─── Layer Registry (PDF §8) ──────────────────────────────────────────────────
