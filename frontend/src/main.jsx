@@ -666,6 +666,7 @@ void main(){
 
     render(g, _matrix) {
       if (!_progFade || !_particleBuf) return;
+      if (!_lastGrid) return;  // wait for real wind data — no synWind spirals
       const mc = _map.getCanvas();
       const W  = mc.width, H = mc.height;
       if (!W || !H) return;
