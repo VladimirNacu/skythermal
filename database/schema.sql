@@ -12,8 +12,17 @@ CREATE SCHEMA IF NOT EXISTS ops;
 CREATE TABLE IF NOT EXISTS auth.users (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   email TEXT UNIQUE NOT NULL,
+  password_hash TEXT,
   display_name TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS auth.user_settings (
+  user_id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+  pilot_level TEXT NOT NULL DEFAULT 'intermediate',
+  default_overlay TEXT NOT NULL DEFAULT 'surface_wind',
+  default_altitude_m INT NOT NULL DEFAULT 0,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE TABLE IF NOT EXISTS auth.pilot_profiles (
@@ -45,6 +54,15 @@ CREATE TABLE IF NOT EXISTS catalog.launch_sites (
 
 CREATE INDEX IF NOT EXISTS launch_sites_point_gix ON catalog.launch_sites USING GIST (launch_point);
 CREATE INDEX IF NOT EXISTS launch_sites_country_status_idx ON catalog.launch_sites (country_code, status);
+
+CREATE TABLE IF NOT EXISTS catalog.user_favorites (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  site_id TEXT NOT NULL,
+  site_data JSONB,
+  added_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(user_id, site_id)
+);
 
 CREATE TABLE IF NOT EXISTS weather.weather_stations (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
