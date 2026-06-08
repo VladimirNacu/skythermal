@@ -30,12 +30,13 @@ const api = {
   recommendations: (lat, lon, radiusKm = 400, pilotLevel = "intermediate") =>
     fetch(`${BASE}/v1/sites/recommendations?lat=${lat}&lon=${lon}&radius_km=${radiusKm}&pilot_level=${pilotLevel}`).then(r => r.json()),
 
-  windGrid: (minLat, maxLat, minLon, maxLon, step, altitudeM = 0) => {
+  windGrid: (minLat, maxLat, minLon, maxLon, step, altitudeM = 0, time = null) => {
     const p = new URLSearchParams({
       min_lat: minLat.toFixed(2), max_lat: maxLat.toFixed(2),
       min_lon: minLon.toFixed(2), max_lon: maxLon.toFixed(2),
       step:    step.toFixed(2),   altitude_m: altitudeM,
     });
+    if (time) p.set("time", time);
     return fetch(`${BASE}/v1/weather/wind-grid?${p}`).then(r => r.json());
   },
 
@@ -125,6 +126,12 @@ function useAsync(asyncFn, deps) {
   return state;
 }
 
+function nowHourISO() {
+  const d = new Date();
+  d.setMinutes(0, 0, 0);
+  return d.toISOString().slice(0, 13) + ":00:00Z";
+}
+
 function useMapState() {
   const [state, setState] = useState(() => {
     const p = new URLSearchParams(window.location.search);
@@ -133,6 +140,7 @@ function useMapState() {
       altitudeM:       Number(p.get("altitude")) || 1000,
       forecastModel:   p.get("model")    ?? "auto_best",
       airspaceEnabled: p.get("airspace") !== "false",
+      selectedTime:    p.get("time")     ?? nowHourISO(),
     };
   });
 
@@ -144,6 +152,7 @@ function useMapState() {
       p.set("altitude", next.altitudeM);
       p.set("model",    next.forecastModel);
       p.set("airspace", next.airspaceEnabled);
+      p.set("time",     next.selectedTime);
       window.history.replaceState(null, "", "?" + p.toString());
       return next;
     });
@@ -767,7 +776,7 @@ function WindParticlesGL({ gridData, map }) {
 // ─── Weather raster overlay controller ───────────────────────────────────────
 // Adds colored raster tiles for non-wind overlays. Tiles 404 until backend
 // implements /v1/tiles/{overlay}/{z}/{x}/{y}.png — MapLibre shows nothing gracefully.
-function WeatherOverlayController({ map, overlay, altitudeM }) {
+function WeatherOverlayController({ map, overlay, altitudeM, selectedTime }) {
   useEffect(() => {
     if (!map) return;
     const SRC_ID = "wx-raster-src";
@@ -779,20 +788,23 @@ function WeatherOverlayController({ map, overlay, altitudeM }) {
     cleanup();
     if (!WIND_OVERLAYS.has(overlay)) {
       try {
+        const t = encodeURIComponent(selectedTime ?? nowHourISO());
         map.addSource(SRC_ID, {
           type: "raster",
-          tiles: [`${BASE}/v1/tiles/${overlay}/{z}/{x}/{y}.png?altitude_m=${altitudeM}`],
+          tiles: [`${BASE}/v1/tiles/${overlay}/{z}/{x}/{y}.png?altitude_m=${altitudeM}&time=${t}`],
           tileSize: 256,
+          minzoom: 2,
+          maxzoom: 10,
         });
         const before = map.getLayer("wind-gl") ? "wind-gl" : undefined;
         map.addLayer({
           id: LYR_ID, type: "raster", source: SRC_ID,
-          paint: { "raster-opacity": 0.72, "raster-fade-duration": 250 },
+          paint: { "raster-opacity": 0.75, "raster-fade-duration": 300 },
         }, before);
       } catch (_) {}
     }
     return cleanup;
-  }, [map, overlay, altitudeM]);
+  }, [map, overlay, altitudeM, selectedTime]);
   return null;
 }
 
@@ -822,7 +834,7 @@ function MapCanvas({ sites, activeSiteId, onSelectSite, siteStatuses, weather, m
           const data = await api.windGrid(
             b.getSouth() - 0.5, b.getNorth() + 0.5,
             b.getWest()  - 0.5, b.getEast()  + 0.5,
-            step, altM,
+            step, altM, mapState.selectedTime,
           );
           setWindGrid(data);
         } catch (e) {
@@ -858,7 +870,12 @@ function MapCanvas({ sites, activeSiteId, onSelectSite, siteStatuses, weather, m
         <WindParticlesGL gridData={windGrid} map={mapInstance} />
       )}
       {mapInstance && (
-        <WeatherOverlayController map={mapInstance} overlay={mapState.overlay} altitudeM={mapState.altitudeM} />
+        <WeatherOverlayController
+          map={mapInstance}
+          overlay={mapState.overlay}
+          altitudeM={mapState.altitudeM}
+          selectedTime={mapState.selectedTime}
+        />
       )}
 
       {/* Mobile: floating search pill */}
@@ -913,7 +930,13 @@ function MapCanvas({ sites, activeSiteId, onSelectSite, siteStatuses, weather, m
         <button title="Zoom out" onClick={() => mapInstanceRef.current?.zoomOut()}>−</button>
       </div>
 
-      <Timeline weather={weather} forecastDays={forecastDays} onForecastDaysChange={onForecastDaysChange} />
+      <Timeline
+        weather={weather}
+        forecastDays={forecastDays}
+        onForecastDaysChange={onForecastDaysChange}
+        selectedTime={mapState.selectedTime}
+        onTimeChange={t => onMapStateChange({ selectedTime: t })}
+      />
     </main>
   );
 }
@@ -922,19 +945,21 @@ function MapCanvas({ sites, activeSiteId, onSelectSite, siteStatuses, weather, m
 const RANGE_TO_DAYS = { "1D": 1, "3D": 3, "5D": 5 };
 const DAYS_TO_RANGE = { 1: "1D", 3: "3D", 5: "5D" };
 
-function Timeline({ weather, forecastDays = 1, onForecastDaysChange }) {
+function Timeline({ weather, forecastDays = 1, onForecastDaysChange, selectedTime, onTimeChange }) {
   const range   = DAYS_TO_RANGE[forecastDays] ?? "1D";
   const [playing, setPlaying] = useState(false);
 
   const hours = weather ?? [];
-  const times = hours.length
-    ? hours.map(h => fmtTime(h.valid_time))
-    : ["02:00", "05:00", "08:00", "11:00", "14:00", "17:00", "20:00", "23:00"];
+  const selectedPrefix = (selectedTime ?? "").slice(0, 13); // "2026-06-07T11"
 
   const winds      = hours.map(h => Math.round(h.wind_kmh));
   const gusts      = hours.map(h => Math.round(h.gust_kmh));
   const thermals   = hours.map(h => h.thermal_strength_ms?.toFixed(1) ?? "—");
   const cloudbases = hours.map(h => h.cloudbase_msl_m);
+
+  const displayHours = hours.length
+    ? hours.slice(0, 8)
+    : Array.from({ length: 8 }, (_, i) => ({ valid_time: null, _label: `${String(i * 3).padStart(2,"0")}:00` }));
 
   return (
     <section className="timelinePanel">
@@ -947,8 +972,27 @@ function Timeline({ weather, forecastDays = 1, onForecastDaysChange }) {
           {playing ? <Pause size={17} fill="currentColor" /> : <Play size={17} fill="currentColor" />}
         </button>
         <div className="timeTrack">
-          {(hours.length ? times.slice(0, 8) : times).map(t => <span key={t}>{t}</span>)}
-          <div className="currentTime"><b>{times[0] ?? "—"}</b></div>
+          {displayHours.map((h, i) => {
+            const label    = h.valid_time ? fmtTime(h.valid_time) : (h._label ?? "");
+            const isActive = h.valid_time && h.valid_time.slice(0, 13) === selectedPrefix;
+            return (
+              <span
+                key={i}
+                className={isActive ? "active" : ""}
+                style={{ cursor: h.valid_time ? "pointer" : "default" }}
+                onClick={() => h.valid_time && onTimeChange?.(
+                  h.valid_time.slice(0, 13) + ":00:00Z"
+                )}
+              >
+                {label}
+              </span>
+            );
+          })}
+          <div className="currentTime">
+            <b>{displayHours.find(h => h.valid_time?.slice(0,13) === selectedPrefix)
+                ? fmtTime(selectedTime)
+                : (displayHours[0]?.valid_time ? fmtTime(displayHours[0].valid_time) : "—")}</b>
+          </div>
         </div>
         <div className="rangeButtons">
           {["1D", "3D", "5D"].map(r => (

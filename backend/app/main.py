@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from backend.app.routers import briefings, flyability, mobile, ops, sites, stations, weather
+from backend.app.routers import briefings, flyability, mobile, ops, sites, stations, tiles, weather
 
 app = FastAPI(
     title="SkyThermal API",
@@ -24,6 +24,7 @@ app.include_router(flyability.router)
 app.include_router(briefings.router)
 app.include_router(mobile.router)
 app.include_router(stations.router)
+app.include_router(tiles.router)
 
 
 @app.get("/")

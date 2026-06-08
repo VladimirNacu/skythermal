@@ -580,6 +580,18 @@ button {
 .timeTrack span {
   color: var(--muted);
   font-size: 12px;
+  border-radius: 4px;
+  padding: 2px 4px;
+  transition: color 0.15s, background 0.15s;
+}
+
+.timeTrack span.active {
+  color: #fff;
+  background: rgba(47, 155, 255, 0.35);
+}
+
+.timeTrack span:hover {
+  color: #cde6ff;
 }
 
 .currentTime {
