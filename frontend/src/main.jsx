@@ -40,6 +40,13 @@ const api = {
     return fetch(`${BASE}/v1/weather/wind-grid?${p}`).then(r => r.json());
   },
 
+  createSite: (body) =>
+    fetch(`${BASE}/v1/sites`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }).then(r => { if (!r.ok) throw new Error(r.statusText); return r.json(); }),
+
   briefing: (siteId, pilotLevel = "intermediate") => {
     const now = new Date().toISOString();
     const end = new Date(Date.now() + 12 * 3600 * 1000).toISOString();
@@ -186,8 +193,94 @@ function ErrorBanner({ message }) {
   );
 }
 
+// ─── Add Site Modal ───────────────────────────────────────────────────────────
+function AddSiteModal({ onClose, onCreated }) {
+  const [form, setForm] = useState({
+    name: "", lat: "", lon: "", altitude_m: "", region: "",
+    country_code: "RO", difficulty: "intermediate", safe_directions: "",
+  });
+  const [saving, setSaving] = useState(false);
+  const [err, setErr]       = useState(null);
+
+  function set(k, v) { setForm(f => ({ ...f, [k]: v })); }
+
+  async function submit(e) {
+    e.preventDefault();
+    setSaving(true); setErr(null);
+    try {
+      const site = await api.createSite({
+        name:            form.name.trim(),
+        lat:             parseFloat(form.lat),
+        lon:             parseFloat(form.lon),
+        altitude_m:      parseInt(form.altitude_m, 10),
+        region:          form.region.trim(),
+        country_code:    form.country_code.trim().toUpperCase(),
+        difficulty:      form.difficulty,
+        safe_directions: form.safe_directions.split(",").map(s => s.trim()).filter(Boolean),
+      });
+      onCreated(site);
+      onClose();
+    } catch (ex) {
+      setErr(ex.message || "Failed to create site");
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="modalOverlay" onClick={e => e.target === e.currentTarget && onClose()}>
+      <div className="modalBox">
+        <div className="modalHeader">
+          <span>Add launch site</span>
+          <button className="iconButton small" onClick={onClose}>✕</button>
+        </div>
+        <form className="modalForm" onSubmit={submit}>
+          <label>Site name
+            <input required value={form.name} onChange={e => set("name", e.target.value)} placeholder="e.g. Bunloc" />
+          </label>
+          <div className="modalRow">
+            <label>Latitude
+              <input required type="number" step="any" value={form.lat} onChange={e => set("lat", e.target.value)} placeholder="45.638" />
+            </label>
+            <label>Longitude
+              <input required type="number" step="any" value={form.lon} onChange={e => set("lon", e.target.value)} placeholder="25.678" />
+            </label>
+          </div>
+          <div className="modalRow">
+            <label>Altitude (m)
+              <input required type="number" value={form.altitude_m} onChange={e => set("altitude_m", e.target.value)} placeholder="950" />
+            </label>
+            <label>Country code
+              <input required maxLength={3} value={form.country_code} onChange={e => set("country_code", e.target.value)} placeholder="RO" />
+            </label>
+          </div>
+          <label>Region
+            <input required value={form.region} onChange={e => set("region", e.target.value)} placeholder="Transylvania" />
+          </label>
+          <label>Difficulty
+            <select value={form.difficulty} onChange={e => set("difficulty", e.target.value)}>
+              <option value="beginner">Beginner</option>
+              <option value="intermediate">Intermediate</option>
+              <option value="advanced">Advanced</option>
+            </select>
+          </label>
+          <label>Safe wind directions (comma-separated)
+            <input value={form.safe_directions} onChange={e => set("safe_directions", e.target.value)} placeholder="N, NW, W" />
+          </label>
+          {err && <p className="modalError">{err}</p>}
+          <div className="modalActions">
+            <button type="button" className="btnSecondary" onClick={onClose}>Cancel</button>
+            <button type="submit" className="btnPrimary" disabled={saving}>
+              {saving ? "Saving…" : "Add site"}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
 // ─── Sidebar ─────────────────────────────────────────────────────────────────
-function Sidebar({ sites, activeSiteId, onSelectSite, bestStatus, mapState, onMapStateChange, searchQuery, onSearchChange, isOpen, onClose }) {
+function Sidebar({ sites, activeSiteId, onSelectSite, bestStatus, mapState, onMapStateChange, searchQuery, onSearchChange, isOpen, onClose, onAddSite }) {
   const driveStatus = bestStatus ?? "UNKNOWN";
   const driveColor  = statusColor(driveStatus);
   const driveCopy   = {
@@ -216,7 +309,7 @@ function Sidebar({ sites, activeSiteId, onSelectSite, bestStatus, mapState, onMa
 
       <div className="sideHeader">
         <span>Favourite sites</span>
-        <button className="iconButton small"><Plus size={15} /></button>
+        <button className="iconButton small" onClick={onAddSite} title="Add new site"><Plus size={15} /></button>
       </div>
 
       <div className="favorites">
@@ -1274,15 +1367,19 @@ function App() {
   const [forecastDays, setForecastDays] = useState(1);
   const [pilotLevel, setPilotLevel]     = useState("intermediate");
   const [sidebarOpen, setSidebarOpen]   = useState(false);
+  const [showAddSite, setShowAddSite]   = useState(false);
+  const [extraSites, setExtraSites]     = useState([]);
+
+  const allSites = useMemo(() => [...(sites ?? []), ...extraSites], [sites, extraSites]);
 
   const filteredSites = useMemo(() => {
-    if (!sites?.length) return [];
-    if (!searchQuery.trim()) return sites;
+    if (!allSites.length) return [];
+    if (!searchQuery.trim()) return allSites;
     const q = searchQuery.toLowerCase();
-    return sites.filter(s =>
+    return allSites.filter(s =>
       s.name.toLowerCase().includes(q) || s.region.toLowerCase().includes(q)
     );
-  }, [sites, searchQuery]);
+  }, [allSites, searchQuery]);
 
   const { data: activeWeather } = useAsync(
     () => activeSite ? api.siteWeatherHourly(activeSite.id, forecastDays) : Promise.resolve([]),
@@ -1345,6 +1442,12 @@ function App() {
 
   return (
     <div className="app">
+      {showAddSite && (
+        <AddSiteModal
+          onClose={() => setShowAddSite(false)}
+          onCreated={site => setExtraSites(prev => [...prev, site])}
+        />
+      )}
       {sidebarOpen && (
         <div className="sidebarBackdrop" onClick={() => setSidebarOpen(false)} />
       )}
@@ -1359,9 +1462,10 @@ function App() {
         onSearchChange={setSearchQuery}
         isOpen={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
+        onAddSite={() => setShowAddSite(true)}
       />
       <MapCanvas
-        sites={sites ?? []}
+        sites={allSites}
         activeSiteId={activeSite?.id}
         onSelectSite={setActiveSite}
         siteStatuses={siteStatuses}

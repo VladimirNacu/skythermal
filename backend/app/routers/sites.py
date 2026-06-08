@@ -1,12 +1,24 @@
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import APIRouter, HTTPException, Query
+from pydantic import BaseModel, Field
 
 from backend.app.data.seed import SITES
-from backend.app.models import PilotLevel, PilotProfile
+from backend.app.models import LaunchSite, PilotLevel, PilotProfile
 from backend.app.services.recommendations import get_site, recommendations
 
 router = APIRouter(prefix="/v1/sites", tags=["sites"])
+
+
+class SiteCreate(BaseModel):
+    name: str
+    lat: float = Field(..., ge=-90, le=90)
+    lon: float = Field(..., ge=-180, le=180)
+    altitude_m: int = Field(..., ge=0, le=6000)
+    region: str
+    country_code: str = Field(..., min_length=2, max_length=3)
+    difficulty: PilotLevel = PilotLevel.intermediate
+    safe_directions: list[str] = []
 
 
 @router.get("")
@@ -31,6 +43,23 @@ def site_recommendations(
     pilot_level: PilotLevel = PilotLevel.intermediate,
 ):
     return recommendations(lat, lon, radius_km, PilotProfile(pilot_level=pilot_level))
+
+
+@router.post("", status_code=201)
+def create_site(body: SiteCreate):
+    site = LaunchSite(
+        id=uuid4(),
+        name=body.name.strip(),
+        lat=body.lat,
+        lon=body.lon,
+        altitude_m=body.altitude_m,
+        region=body.region.strip(),
+        country_code=body.country_code.upper(),
+        difficulty=body.difficulty,
+        safe_directions=body.safe_directions,
+    )
+    SITES.append(site)
+    return site
 
 
 @router.get("/{site_id}")
