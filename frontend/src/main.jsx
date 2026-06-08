@@ -872,7 +872,10 @@ void main(){
   function _buildLUT(map) {
     if (!_lastGrid) { _lut_ok = null; return; }
     const mc = map.getCanvas();
-    const W  = mc.offsetWidth, H = mc.offsetHeight;
+    // Use CSS pixels (offsetWidth/Height) — map.unproject() takes CSS pixel coordinates.
+    // Keep consistent with _cpuUpdate which divides by the same CSS dimensions.
+    const dpr = window.devicePixelRatio || 1;
+    const W  = mc.width / dpr, H = mc.height / dpr;
     if (!W || !H) return;
     _lut_u = new Float32Array(LW * LH);
     _lut_v = new Float32Array(LW * LH);
@@ -966,17 +969,19 @@ void main(){
     render(g, _matrix) {
       if (!_progFade || !_particleBuf) return;
       if (!_lastGrid) return;  // wait for real wind data — no synWind spirals
-      const mc = _map.getCanvas();
-      const W  = mc.width, H = mc.height;
+      const mc  = _map.getCanvas();
+      const W   = mc.width, H = mc.height;       // physical pixels — for FBO/viewport
       if (!W || !H) return;
       _ensureTrail(g, W, H);
+      const dpr = window.devicePixelRatio || 1;
+      const Wc  = W / dpr, Hc = H / dpr;         // CSS pixels — for LUT & velocity scaling
 
       const prevFBO = g.getParameter(g.FRAMEBUFFER_BINDING);
       g.disable(g.DEPTH_TEST);
       g.disable(g.STENCIL_TEST);
 
-      // 1. CPU update
-      _cpuUpdate(_map.getZoom(), W, H);
+      // 1. CPU update (use CSS pixel dimensions for geo→screen velocity scaling)
+      _cpuUpdate(_map.getZoom(), Wc, Hc);
 
       // 2. Upload particle data to GPU
       g.bindBuffer(g.ARRAY_BUFFER, _particleBuf);
@@ -1058,9 +1063,11 @@ function WindParticlesGL({ gridData, map }) {
     const onView = () => layerRef.current?.rebuildLUT(map);
     map.on("moveend", onView);
     map.on("zoomend", onView);
+    map.on("resize",  onView);   // rebuild LUT when canvas dimensions change
     return () => {
       map.off("moveend", onView);
       map.off("zoomend", onView);
+      map.off("resize",  onView);
       layerRef.current = null;
       try { if (map.getLayer("wind-gl")) map.removeLayer("wind-gl"); } catch (_) {}
     };
