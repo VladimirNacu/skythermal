@@ -1419,7 +1419,9 @@ function BlockerList({ blockers }) {
 }
 
 function RightPanel({ site, onClose, pilotLevel = "intermediate", forecastDays = 1 }) {
-  const [tab, setTab] = useState("Overview");
+  const [tab, setTab]                       = useState("Overview");
+  const [mobilePanelExpanded, setMobilePanelExpanded] = useState(false);
+  const isMobile = useMediaQuery("(max-width: 768px)");
 
   const { data: timeline, loading: tlLoading, error: tlError } =
     useAsync(() => api.siteFlyabilityTimeline(site.id, pilotLevel, forecastDays), [site.id, pilotLevel, forecastDays]);
@@ -1434,8 +1436,19 @@ function RightPanel({ site, onClose, pilotLevel = "intermediate", forecastDays =
   const color    = statusColor(decision?.status);
   const fi       = decision?.flyability_score ?? 0;
 
+  const panelClass = isMobile
+    ? `rightPanel ${mobilePanelExpanded ? "expanded" : "collapsed"}`
+    : "rightPanel";
+
   return (
-    <aside className="rightPanel">
+    <aside className={panelClass}>
+      {isMobile && (
+        <button
+          className="sheetHandle"
+          onClick={() => setMobilePanelExpanded(v => !v)}
+          aria-label={mobilePanelExpanded ? "Collapse site panel" : "Expand site panel"}
+        />
+      )}
       <div className="siteTitle">
         <div>
           <h1><Star size={18} fill="currentColor" /> {site.name}</h1>
