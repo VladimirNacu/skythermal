@@ -322,10 +322,39 @@ function AddSiteModal({ onClose, onCreated }) {
     name: "", lat: "", lon: "", altitude_m: "", region: "",
     country_code: "RO", difficulty: "intermediate", safe_directions: "",
   });
-  const [saving, setSaving] = useState(false);
-  const [err, setErr]       = useState(null);
+  const [saving,   setSaving]   = useState(false);
+  const [locating, setLocating] = useState(false);
+  const [err, setErr]           = useState(null);
 
   function set(k, v) { setForm(f => ({ ...f, [k]: v })); }
+
+  async function useGPS() {
+    if (!navigator.geolocation) { setErr("GPS not available in this browser"); return; }
+    setLocating(true); setErr(null);
+    navigator.geolocation.getCurrentPosition(async pos => {
+      const lat = pos.coords.latitude;
+      const lon = pos.coords.longitude;
+      setForm(f => ({ ...f, lat: lat.toFixed(6), lon: lon.toFixed(6) }));
+      try {
+        const r = await fetch(
+          `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}&zoom=10`,
+          { headers: { "Accept-Language": "en" } }
+        ).then(r => r.json());
+        const a = r.address ?? {};
+        const region = a.county || a.state || a.region || a.city || "";
+        const cc = (a.country_code || "").toUpperCase();
+        setForm(f => ({
+          ...f,
+          region:       f.region       || region,
+          country_code: f.country_code === "RO" && cc ? cc : f.country_code,
+        }));
+      } catch (_) {}
+      setLocating(false);
+    }, err => {
+      setErr(err.code === 1 ? "Location permission denied" : "Could not get location");
+      setLocating(false);
+    }, { timeout: 10000 });
+  }
 
   async function submit(e) {
     e.preventDefault();
@@ -360,6 +389,10 @@ function AddSiteModal({ onClose, onCreated }) {
           <label>Site name
             <input required value={form.name} onChange={e => set("name", e.target.value)} placeholder="e.g. Bunloc" />
           </label>
+          <button type="button" className="gpsBtn" onClick={useGPS} disabled={locating}>
+            <Crosshair size={15} />
+            {locating ? "Getting location…" : "Use my GPS location"}
+          </button>
           <div className="modalRow">
             <label>Latitude
               <input required type="number" step="any" value={form.lat} onChange={e => set("lat", e.target.value)} placeholder="45.638" />
