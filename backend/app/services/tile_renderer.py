@@ -9,6 +9,8 @@ import base64
 import io
 import logging
 import math
+import threading
+import time
 from datetime import datetime, timezone
 
 import httpx
@@ -19,8 +21,11 @@ from backend.app.services.weather_fetcher import _cache_get, _cache_set
 logger = logging.getLogger(__name__)
 
 OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
-GRID_N  = 8    # sample points per axis  (64 total — one batch request per tile)
+GRID_N  = 4    # sample points per axis (16 total — was 64, reduced to limit API rate)
 TILE_PX = 256
+
+# Limit concurrent Open-Meteo requests so MapLibre tile bursts don't cause 429s
+_OM_SEM = threading.Semaphore(3)
 
 # ─── Tile math ────────────────────────────────────────────────────────────────
 
@@ -276,18 +281,20 @@ def render_tile(
     lons   = linspace(lon_min, lon_max, GRID_N)
     points = [(lat, lon) for lat in lats for lon in lons]
 
+    params = {
+        "latitude":      ",".join(f"{p[0]:.4f}" for p in points),
+        "longitude":     ",".join(f"{p[1]:.4f}" for p in points),
+        "hourly":        _OVL_VARS.get(overlay, "temperature_2m"),
+        "forecast_days": 1,
+        "timezone":      "UTC",
+    }
     try:
-        resp = httpx.get(
-            OPEN_METEO_URL,
-            params={
-                "latitude":      ",".join(f"{p[0]:.4f}" for p in points),
-                "longitude":     ",".join(f"{p[1]:.4f}" for p in points),
-                "hourly":        _OVL_VARS.get(overlay, "temperature_2m"),
-                "forecast_days": 1,
-                "timezone":      "UTC",
-            },
-            timeout=15,
-        )
+        with _OM_SEM:
+            resp = httpx.get(OPEN_METEO_URL, params=params, timeout=15)
+            if resp.status_code == 429:
+                logger.warning("tile 429 (%s %d/%d/%d), retrying in 2s", overlay, z, x, y)
+                time.sleep(2.0)
+                resp = httpx.get(OPEN_METEO_URL, params=params, timeout=15)
         resp.raise_for_status()
         data = resp.json()
     except Exception as exc:
