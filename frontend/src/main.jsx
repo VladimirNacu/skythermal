@@ -1033,10 +1033,18 @@ void main(){
       [_progFade, _progBlit, _progParticle].forEach(p => p && g.deleteProgram(p));
     },
 
-    // Called when new wind grid data arrives or map view changes
+    // Called when new wind grid data arrives or map view changes.
+    // gridData===null means overlay switched away from wind → clear.
+    // gridData with empty grid means fetch failed → keep existing grid so
+    // particles don't vanish while waiting for a retry.
     updateWind(gridData, map) {
       if (!_gl) { _pendingUpdate = { gridData, map }; return; }
-      _lastGrid = gridData?.grid?.length ? buildWindGrid(gridData.grid) : null;
+      if (gridData === null) {
+        _lastGrid = null;
+      } else if (gridData?.grid?.length) {
+        _lastGrid = buildWindGrid(gridData.grid);
+      }
+      // empty grid (failed/429) → keep _lastGrid as-is
       if (map) _buildLUT(map);
     },
 
