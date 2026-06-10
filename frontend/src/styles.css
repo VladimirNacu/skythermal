@@ -834,6 +834,11 @@ button {
   display: grid;
   gap: 5px;
   overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.forecastTable::-webkit-scrollbar {
+  display: none;
 }
 
 .forecastRow {
@@ -1197,21 +1202,8 @@ button {
     display: block;
   }
 
-  /* Timeline slim bar above the bottom sheet */
-  .timelinePanel {
-    position: fixed;
-    left: 10px;
-    right: 10px;
-    bottom: calc(24dvh + 18px);
-    height: 54px;
-    z-index: 35;
-    padding: 8px 10px;
-    border-radius: 16px;
-    background: rgba(4, 15, 28, 0.88);
-    border: 1px solid rgba(160, 210, 255, 0.15);
-  }
-
-  .timelineRows { display: none; }
+  /* Timeline hidden on mobile — right panel forecast provides time context */
+  .timelinePanel { display: none; }
 
   .timelineTop {
     display: flex;
