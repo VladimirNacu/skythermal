@@ -1154,13 +1154,15 @@ function MapCanvas({ sites, activeSiteId, onSelectSite, siteStatuses, weather, m
 
     mapInstance.on("moveend", refresh);
     mapInstance.on("zoomend", refresh);
+    mapInstance.on("resize",  refresh);
     refresh();
     return () => {
       clearTimeout(tid);
       mapInstance.off("moveend", refresh);
       mapInstance.off("zoomend", refresh);
+      mapInstance.off("resize",  refresh);
     };
-  }, [isWind, mapInstance, mapState.overlay, mapState.altitudeM]);
+  }, [isWind, mapInstance, mapState.overlay, mapState.altitudeM, mapState.selectedTime]);
 
   return (
     <main className="mapShell">
