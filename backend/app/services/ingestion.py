@@ -6,6 +6,7 @@ User requests are served from DB cache instead of hitting Open-Meteo in real-tim
 import json
 import logging
 import threading
+import time
 from datetime import datetime, timezone
 
 from backend.app.database import db
@@ -15,12 +16,15 @@ logger = logging.getLogger(__name__)
 
 REGIONS = [
     # (name, min_lat, max_lat, min_lon, max_lon, step_deg)
-    ("romania_detail", 43.5,  49.0, 19.5,  31.0, 0.75),
+    # step=1.0 → 91 pts;  step=4.0 → 140 pts — both safely under the 200-pt cap
+    ("romania_detail", 43.5,  49.0, 19.5,  31.0, 1.0),
     ("europe_wide",    35.0,  72.0, -12.0, 42.0, 4.0),
 ]
 ALTITUDES = [0, 500, 1000, 1500, 2000, 3000]
 
 _timer: threading.Timer | None = None
+
+_INTER_CALL_DELAY_S = 12  # seconds between consecutive Open-Meteo batch calls
 
 
 def run_ingestion() -> None:
@@ -53,6 +57,8 @@ def run_ingestion() -> None:
                 logger.info("ingestion: stored %d pts %s alt=%d", len(grid), region_name, alt)
             except Exception as exc:
                 logger.error("ingestion: failed %s alt=%d: %s", region_name, alt, exc)
+            finally:
+                time.sleep(_INTER_CALL_DELAY_S)
 
 
 def _reschedule() -> None:
