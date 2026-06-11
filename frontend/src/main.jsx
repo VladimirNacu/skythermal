@@ -1214,13 +1214,6 @@ function MapCanvas({ sites, activeSiteId, onSelectSite, siteStatuses, weather, m
         <span>Layers</span>
       </button>
 
-      <div className="topLegend">
-        <span>Wind (km/h)</span>
-        <div className="legendGradient">
-          {[0, 10, 20, 30, 40, 50, 60, 70, "80+"].map(v => <b key={v}>{v}</b>)}
-        </div>
-      </div>
-
       <div className="altitudeControl">
         <span>Altitude</span>
         {ALTITUDES.map(alt => (
