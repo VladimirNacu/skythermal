@@ -1,7 +1,14 @@
 """
-Background wind-grid ingestion: pre-fetches Open-Meteo wind data every 30 minutes
-for Romania (fine) and Europe (coarse) at 6 altitudes, stores results in PostgreSQL.
-User requests are served from DB cache instead of hitting Open-Meteo in real-time.
+Background wind-grid ingestion: pre-fetches Open-Meteo wind data every hour
+for the Romania core region at 6 altitudes, stored in PostgreSQL.
+User requests are served from DB cache instead of hitting Open-Meteo directly.
+
+Rate-limit strategy:
+  - Only one region: Romania core, step=2.0° → 18 points per call (18 API credits)
+  - 6 altitudes × 18 pts = 108 credits per cycle
+  - Cycle every 3600s → 2,592 credits/day (safe on free tier)
+  - 30s between altitude calls to avoid burst limits
+  - If ANY call returns 429, abort the cycle and reschedule in 1 hour
 """
 import json
 import logging
@@ -14,65 +21,78 @@ from backend.app.services.weather_fetcher import fetch_wind_grid
 
 logger = logging.getLogger(__name__)
 
+# Romania core: step=2.0° → n_lat=3, n_lon=6 → 18 points per altitude
 REGIONS = [
     # (name, min_lat, max_lat, min_lon, max_lon, step_deg)
-    # step=1.0 → 91 pts;  step=4.0 → 140 pts — both safely under the 200-pt cap
-    ("romania_detail", 43.5,  49.0, 19.5,  31.0, 1.0),
-    ("europe_wide",    35.0,  72.0, -12.0, 42.0, 4.0),
+    ("romania_core", 43.5, 49.0, 19.5, 31.0, 2.0),
 ]
 ALTITUDES = [0, 500, 1000, 1500, 2000, 3000]
 
+_CYCLE_S = 3600          # refresh every 1 hour
+_INTER_CALL_S = 30       # 30s between altitude calls within one cycle
+_BACKOFF_429_S = 3600    # if 429, skip rest and retry in 1 hour
+
 _timer: threading.Timer | None = None
 
-_INTER_CALL_DELAY_S = 12  # seconds between consecutive Open-Meteo batch calls
+
+class _RateLimited(Exception):
+    pass
 
 
-def run_ingestion() -> None:
+def _fetch_and_store(region_name, min_lat, max_lat, min_lon, max_lon, step, alt, valid_for):
+    grid = fetch_wind_grid(min_lat, max_lat, min_lon, max_lon, step, alt)
+
+    if not grid:
+        # fetch_wind_grid already logged the 429; surface it so the cycle can abort
+        raise _RateLimited(f"{region_name} alt={alt}")
+
+    with db() as conn:
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO weather.wind_grid_cache
+                (region, altitude_m, valid_for,
+                 min_lat, max_lat, min_lon, max_lon,
+                 step_deg, point_count, grid_data)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (region, altitude_m, valid_for) DO UPDATE
+                SET fetched_at  = now(),
+                    point_count = EXCLUDED.point_count,
+                    grid_data   = EXCLUDED.grid_data
+        """, (
+            region_name, alt, valid_for,
+            min_lat, max_lat, min_lon, max_lon,
+            step, len(grid),
+            json.dumps(grid),
+        ))
+    logger.info("ingestion: stored %d pts %s alt=%d", len(grid), region_name, alt)
+
+
+def run_ingestion() -> float:
+    """Run one ingestion cycle. Returns the delay in seconds before the next cycle."""
     valid_for = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+
     for region_name, min_lat, max_lat, min_lon, max_lon, step in REGIONS:
-        for alt in ALTITUDES:
+        for i, alt in enumerate(ALTITUDES):
+            if i > 0:
+                time.sleep(_INTER_CALL_S)
             try:
-                grid = fetch_wind_grid(min_lat, max_lat, min_lon, max_lon, step, alt)
-                if not grid:
-                    logger.warning("ingestion: empty result %s alt=%d", region_name, alt)
-                    continue
-                with db() as conn:
-                    cur = conn.cursor()
-                    cur.execute("""
-                        INSERT INTO weather.wind_grid_cache
-                            (region, altitude_m, valid_for,
-                             min_lat, max_lat, min_lon, max_lon,
-                             step_deg, point_count, grid_data)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                        ON CONFLICT (region, altitude_m, valid_for) DO UPDATE
-                            SET fetched_at  = now(),
-                                point_count = EXCLUDED.point_count,
-                                grid_data   = EXCLUDED.grid_data
-                    """, (
-                        region_name, alt, valid_for,
-                        min_lat, max_lat, min_lon, max_lon,
-                        step, len(grid),
-                        json.dumps(grid),
-                    ))
-                logger.info("ingestion: stored %d pts %s alt=%d", len(grid), region_name, alt)
+                _fetch_and_store(region_name, min_lat, max_lat, min_lon, max_lon,
+                                 step, alt, valid_for)
+            except _RateLimited as exc:
+                logger.warning("ingestion: 429/empty for %s — aborting cycle, retry in %ds", exc, _BACKOFF_429_S)
+                return _BACKOFF_429_S
             except Exception as exc:
-                logger.error("ingestion: failed %s alt=%d: %s", region_name, alt, exc)
-            finally:
-                time.sleep(_INTER_CALL_DELAY_S)
+                logger.error("ingestion: DB write failed %s alt=%d: %s", region_name, alt, exc)
 
-
-def _reschedule() -> None:
-    global _timer
-    _timer = threading.Timer(1800, _run_and_reschedule)
-    _timer.daemon = True
-    _timer.start()
+    return _CYCLE_S
 
 
 def _run_and_reschedule() -> None:
-    try:
-        run_ingestion()
-    finally:
-        _reschedule()
+    global _timer
+    next_delay = run_ingestion()
+    _timer = threading.Timer(next_delay, _run_and_reschedule)
+    _timer.daemon = True
+    _timer.start()
 
 
 def start_ingestion(delay_s: float = 5.0) -> None:
@@ -89,7 +109,7 @@ def query_cached_wind_grid(
     min_lon: float,
     max_lon: float,
     altitude_m: int,
-    max_age_s: int = 2100,
+    max_age_s: int = 7200,
 ) -> list[dict] | None:
     """Return DB-cached wind grid points covering the bbox, or None if stale/missing."""
     try:
