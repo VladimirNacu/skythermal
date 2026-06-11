@@ -6,6 +6,8 @@ Falls back gracefully if Open-Meteo or Redis are unreachable.
 import json
 import logging
 import math
+import threading
+import time
 from datetime import datetime, timezone
 
 import httpx
@@ -14,6 +16,10 @@ from backend.app.config import settings
 from backend.app.models import WeatherHour
 
 logger = logging.getLogger(__name__)
+
+# Shared rate-limit gate for ALL Open-Meteo calls (tiles + wind-grid).
+# Open-Meteo free tier enforces burst limits; this prevents concurrent hammering.
+OM_LOCK = threading.Semaphore(2)
 
 OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
 
@@ -255,19 +261,21 @@ def fetch_wind_grid(
     lat_str = ",".join(str(p[0]) for p in points)
     lon_str = ",".join(str(p[1]) for p in points)
 
+    om_params = {
+        "latitude":       lat_str,
+        "longitude":      lon_str,
+        "hourly":         f"{spd_var},{dir_var}",
+        "wind_speed_unit":"kmh",
+        "forecast_days":  1,
+        "timezone":       "UTC",
+    }
     try:
-        resp = httpx.get(
-            OPEN_METEO_URL,
-            params={
-                "latitude":       lat_str,
-                "longitude":      lon_str,
-                "hourly":         f"{spd_var},{dir_var}",
-                "wind_speed_unit":"kmh",
-                "forecast_days":  1,
-                "timezone":       "UTC",
-            },
-            timeout=20,
-        )
+        with OM_LOCK:
+            resp = httpx.get(OPEN_METEO_URL, params=om_params, timeout=10)
+            if resp.status_code == 429:
+                logger.warning("wind-grid 429, retrying in 2s")
+                time.sleep(2.0)
+                resp = httpx.get(OPEN_METEO_URL, params=om_params, timeout=10)
         resp.raise_for_status()
         data = resp.json()
     except Exception as exc:

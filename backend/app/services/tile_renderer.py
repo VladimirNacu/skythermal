@@ -9,23 +9,19 @@ import base64
 import io
 import logging
 import math
-import threading
 import time
 from datetime import datetime, timezone
 
 import httpx
 from PIL import Image
 
-from backend.app.services.weather_fetcher import _cache_get, _cache_set
+from backend.app.services.weather_fetcher import _cache_get, _cache_set, OM_LOCK
 
 logger = logging.getLogger(__name__)
 
 OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
 GRID_N  = 4    # sample points per axis (16 total — was 64, reduced to limit API rate)
 TILE_PX = 256
-
-# Limit concurrent Open-Meteo requests so MapLibre tile bursts don't cause 429s
-_OM_SEM = threading.Semaphore(3)
 
 # ─── Tile math ────────────────────────────────────────────────────────────────
 
@@ -289,7 +285,7 @@ def render_tile(
         "timezone":      "UTC",
     }
     try:
-        with _OM_SEM:
+        with OM_LOCK:
             resp = httpx.get(OPEN_METEO_URL, params=params, timeout=15)
             if resp.status_code == 429:
                 logger.warning("tile 429 (%s %d/%d/%d), retrying in 2s", overlay, z, x, y)
