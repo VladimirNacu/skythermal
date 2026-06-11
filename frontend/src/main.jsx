@@ -708,7 +708,11 @@ function buildWindGrid(pts) {
 }
 
 function interpWind(lng, lat, grid) {
-  if (!grid || lat < grid.minLat || lat > grid.maxLat || lng < grid.minLon || lng > grid.maxLon) return null;
+  if (!grid) return null;
+  // Clamp to grid bounds so edge pixels use nearest-border wind rather than falling
+  // back to synthetic spiral. Fixes blank ring at viewport edges when zoomed out.
+  lat = Math.max(grid.minLat, Math.min(grid.maxLat, lat));
+  lng = Math.max(grid.minLon, Math.min(grid.maxLon, lng));
   const col = (lng - grid.minLon) / grid.stepLon;
   const row = (lat - grid.minLat) / grid.stepLat;
   const c0  = Math.floor(col), c1 = Math.min(c0 + 1, grid.lons.length - 1);
@@ -1148,9 +1152,10 @@ function MapCanvas({ sites, activeSiteId, onSelectSite, siteStatuses, weather, m
         const step = computeGridStep(mapInstance);
         const altM = mapState.overlay === "altitude_wind" ? mapState.altitudeM : 0;
         try {
+          const pad  = Math.max(1.0, step * 1.5);
           const data = await api.windGrid(
-            b.getSouth() - 0.5, b.getNorth() + 0.5,
-            b.getWest()  - 0.5, b.getEast()  + 0.5,
+            b.getSouth() - pad, b.getNorth() + pad,
+            b.getWest()  - pad, b.getEast()  + pad,
             step, altM, mapState.selectedTime,
           );
           setWindGrid(data);
