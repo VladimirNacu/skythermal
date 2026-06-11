@@ -19,7 +19,7 @@ from backend.app.services.weather_fetcher import _cache_get, _cache_set, OM_LOCK
 
 logger = logging.getLogger(__name__)
 
-OPEN_METEO_URL = "https://ensemble-api.open-meteo.com/v1/ensemble"
+OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
 GRID_N  = 4    # sample points per axis (16 total — was 64, reduced to limit API rate)
 TILE_PX = 256
 
