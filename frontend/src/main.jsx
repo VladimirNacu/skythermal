@@ -1108,6 +1108,9 @@ function WeatherOverlayController({ map, overlay, altitudeM, selectedTime }) {
       try { if (map.getSource(SRC_ID)) map.removeSource(SRC_ID); } catch (_) {}
     };
     cleanup();
+    // Wind overlays use the particle layer for visualisation — no raster tile needed.
+    // Only load tiles for non-wind overlays (thermals, rain, temperature, etc.)
+    if (WIND_OVERLAYS.has(overlay)) return cleanup;
     try {
       const t = encodeURIComponent(selectedTime ?? nowHourISO());
       map.addSource(SRC_ID, {
