@@ -4,6 +4,7 @@ from uuid import UUID
 from fastapi import APIRouter, HTTPException, Query
 
 from backend.app.data.seed import demo_weather
+from backend.app.services.ingestion import query_cached_wind_grid
 from backend.app.services.recommendations import get_site
 from backend.app.services.weather_fetcher import fetch_site_weather, fetch_wind_grid
 
@@ -28,6 +29,11 @@ def wind_grid_endpoint(
     step:       float = Query(1.0, ge=0.25, le=3.0),
     altitude_m: int   = Query(0,   ge=0,   le=5000),
 ):
-    grid     = fetch_wind_grid(min_lat, max_lat, min_lon, max_lon, step, altitude_m)
-    now      = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
-    return {"grid": grid, "valid_time": now.isoformat()}
+    now = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+
+    cached = query_cached_wind_grid(min_lat, max_lat, min_lon, max_lon, altitude_m)
+    if cached is not None and len(cached) >= 4:
+        return {"grid": cached, "valid_time": now.isoformat(), "source": "cache"}
+
+    grid = fetch_wind_grid(min_lat, max_lat, min_lon, max_lon, step, altitude_m)
+    return {"grid": grid, "valid_time": now.isoformat(), "source": "live"}

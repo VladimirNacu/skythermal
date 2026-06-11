@@ -158,3 +158,21 @@ CREATE TABLE IF NOT EXISTS ops.ingestion_jobs (
   error TEXT
 );
 
+CREATE TABLE IF NOT EXISTS weather.wind_grid_cache (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  region TEXT NOT NULL,
+  altitude_m INT NOT NULL,
+  fetched_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  valid_for TIMESTAMPTZ NOT NULL,
+  min_lat FLOAT NOT NULL,
+  max_lat FLOAT NOT NULL,
+  min_lon FLOAT NOT NULL,
+  max_lon FLOAT NOT NULL,
+  step_deg FLOAT NOT NULL,
+  point_count INT NOT NULL DEFAULT 0,
+  grid_data JSONB NOT NULL DEFAULT '[]',
+  UNIQUE (region, altitude_m, valid_for)
+);
+CREATE INDEX IF NOT EXISTS wind_grid_cache_lookup_idx
+  ON weather.wind_grid_cache (altitude_m, fetched_at DESC);
+
