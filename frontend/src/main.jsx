@@ -740,7 +740,7 @@ function computeGridStep(map) {
 // Trail: ping-pong RGBA8 FBOs; fade → additive draw → blit to MapLibre framebuffer.
 
 function createWindGLLayer() {
-  const N  = window.innerWidth < 768 ? 3500 : 25000;
+  const N  = window.innerWidth < 768 ? 1500 : 8000;
   const LW = 128, LH = 128;  // wind LUT dimensions
 
   // ── GLSL shaders ──────────────────────────────────────────────────────────
