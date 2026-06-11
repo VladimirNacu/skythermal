@@ -15,11 +15,11 @@ from datetime import datetime, timezone
 import httpx
 from PIL import Image
 
-from backend.app.services.weather_fetcher import _cache_get, _cache_set, OM_LOCK
+from backend.app.services.weather_fetcher import _cache_get, _cache_set, OM_LOCK, _OM_PARAMS_EXTRA
 
 logger = logging.getLogger(__name__)
 
-OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
+OPEN_METEO_URL = "https://ensemble-api.open-meteo.com/v1/ensemble"
 GRID_N  = 4    # sample points per axis (16 total — was 64, reduced to limit API rate)
 TILE_PX = 256
 
@@ -278,6 +278,7 @@ def render_tile(
     points = [(lat, lon) for lat in lats for lon in lons]
 
     params = {
+        **_OM_PARAMS_EXTRA,
         "latitude":      ",".join(f"{p[0]:.4f}" for p in points),
         "longitude":     ",".join(f"{p[1]:.4f}" for p in points),
         "hourly":        _OVL_VARS.get(overlay, "temperature_2m"),

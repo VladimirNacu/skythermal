@@ -21,7 +21,8 @@ logger = logging.getLogger(__name__)
 # Open-Meteo free tier enforces burst limits; this prevents concurrent hammering.
 OM_LOCK = threading.Semaphore(2)
 
-OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
+OPEN_METEO_URL = "https://ensemble-api.open-meteo.com/v1/ensemble"
+_OM_PARAMS_EXTRA = {"models": "icon_seamless"}   # required by ensemble endpoint
 
 HOURLY_VARS = ",".join([
     "windspeed_10m",
@@ -192,6 +193,7 @@ def fetch_site_weather(
         resp = httpx.get(
             OPEN_METEO_URL,
             params={
+                **_OM_PARAMS_EXTRA,
                 "latitude": lat,
                 "longitude": lon,
                 "hourly": HOURLY_VARS,
@@ -262,6 +264,7 @@ def fetch_wind_grid(
     lon_str = ",".join(str(p[1]) for p in points)
 
     om_params = {
+        **_OM_PARAMS_EXTRA,
         "latitude":       lat_str,
         "longitude":      lon_str,
         "hourly":         f"{spd_var},{dir_var}",
