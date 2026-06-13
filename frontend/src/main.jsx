@@ -486,7 +486,7 @@ function Sidebar({ sites, activeSiteId, onSelectSite, bestStatus, mapState, onMa
     <aside className={`sidebar${isOpen ? " is-open" : ""}`}>
       <div className="brand">
         <div className="brandMark">▰</div>
-        <span>SkyThermal <small style={{ fontSize: "0.55em", opacity: 0.6, fontWeight: 500 }}>RO</small></span>
+        <span>SkyThermal <small style={{ fontSize: "0.55em", opacity: 0.6, fontWeight: 500 }}>RO</small><small style={{ fontSize: "0.5em", opacity: 0.5, fontWeight: 400, marginLeft: "0.6em" }}>— John</small></span>
         {user ? (
           <div className="userChip" title={user.email}>
             <UserCircle size={16} />
